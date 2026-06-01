@@ -87,28 +87,13 @@ try:
     from transformers.generation.beam_constraints import DisjunctiveConstraint, PhrasalConstraint
     from transformers.generation.beam_search import BeamScorer, BeamSearchScorer, ConstrainedBeamSearchScorer
 except (ImportError, AttributeError):
-    class _UnavailableBeamFeature:
-        def __init__(self, *args, **kwargs):
-            raise ImportError(
-                "This Transformers version no longer exposes the legacy beam-search helpers used by "
-                "IndexTTS' vendored generation code. Use sampling/greedy generation or install "
-                "transformers<5 for beam-search generation."
-            )
-
-    class BeamScorer(_UnavailableBeamFeature):
-        pass
-
-    class BeamSearchScorer(_UnavailableBeamFeature):
-        pass
-
-    class ConstrainedBeamSearchScorer(_UnavailableBeamFeature):
-        pass
-
-    class DisjunctiveConstraint(_UnavailableBeamFeature):
-        pass
-
-    class PhrasalConstraint(_UnavailableBeamFeature):
-        pass
+    from indextts.gpt.transformers_beam_search_compat import (
+        BeamScorer,
+        BeamSearchScorer,
+        ConstrainedBeamSearchScorer,
+        DisjunctiveConstraint,
+        PhrasalConstraint,
+    )
 
 from transformers.generation.candidate_generator import (
     AssistedCandidateGenerator,

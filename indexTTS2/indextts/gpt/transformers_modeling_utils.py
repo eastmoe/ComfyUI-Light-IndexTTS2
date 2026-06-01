@@ -44,7 +44,10 @@ from transformers.configuration_utils import PretrainedConfig
 from transformers.dynamic_module_utils import custom_object_save
 from transformers.generation import GenerationConfig
 import transformers
-from indextts.gpt.transformers_config_compat import get_non_default_generation_parameters
+from indextts.gpt.transformers_config_compat import (
+    ensure_model_config_compat,
+    get_non_default_generation_parameters,
+)
 from indextts.gpt.transformers_generation_utils import GenerationMixin
 from transformers.generation import GenerationConfig
 
@@ -1467,6 +1470,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
             config = self._autoset_attn_implementation(
                 config, torch_dtype=torch.get_default_dtype(), check_device_map=False
             )
+        ensure_model_config_compat(config)
         self.config = config
 
         self.name_or_path = config.name_or_path
