@@ -21,10 +21,10 @@ setup(
         "tokenizers>=0.21,<1",
         "huggingface_hub",
         "safetensors==0.5.2",
-        "modelscope",
-        "omegaconf",
+        # "modelscope",  # replaced by transformers.AutoModelForCausalLM
+        # "omegaconf",  # replaced by PyYAML + indextts.utils.config.AttrDict
         "sentencepiece",
-        "librosa>=0.10.2.post1,<0.12",
+        # "librosa>=0.10.2.post1,<0.12",  # replaced by torchaudio
         "numpy>=1.23,<3",
         "scipy",
         "einops",

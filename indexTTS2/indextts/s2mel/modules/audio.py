@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from librosa.filters import mel as librosa_mel_fn
+import torchaudio
 
 MAX_WAV_VALUE = 32768.0
 
@@ -43,8 +43,16 @@ def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin,
 
     global mel_basis, hann_window  # pylint: disable=global-statement
     if f"{str(sampling_rate)}_{str(fmax)}_{str(y.device)}" not in mel_basis:
-        mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax)
-        mel_basis[str(sampling_rate) + "_" + str(fmax) + "_" + str(y.device)] = torch.from_numpy(mel).float().to(y.device)
+        mel = torchaudio.functional.melscale_fbanks(
+            n_freqs=n_fft // 2 + 1,
+            f_min=fmin,
+            f_max=fmax if fmax is not None else sampling_rate / 2,
+            n_mels=num_mels,
+            sample_rate=sampling_rate,
+            norm="slaney",
+            mel_scale="slaney",
+        ).transpose(0, 1)
+        mel_basis[str(sampling_rate) + "_" + str(fmax) + "_" + str(y.device)] = mel.float().to(y.device)
         hann_window[str(sampling_rate) + "_" + str(y.device)] = torch.hann_window(win_size).to(y.device)
 
     y = torch.nn.functional.pad(

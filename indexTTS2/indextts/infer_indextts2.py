@@ -1,16 +1,14 @@
 import os
 os.environ['HF_HUB_CACHE'] = './checkpoints/hf_cache'
 import time
-import librosa
 
 import numpy as np
 import torch
 import torchaudio
 from torch.nn.utils.rnn import pad_sequence
-from omegaconf import OmegaConf
 from huggingface_hub import hf_hub_download
 import safetensors
-from transformers import SeamlessM4TFeatureExtractor
+from transformers import AutoModelForCausalLM, AutoTokenizer, SeamlessM4TFeatureExtractor
 
 import warnings
 
@@ -19,6 +17,8 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 from indextts.gpt.model_v2 import UnifiedVoice
 from indextts.utils.checkpoint import load_checkpoint
+from indextts.utils.audio import load_audio_mono
+from indextts.utils.config import load_config
 from indextts.utils.compat import torch_load
 from indextts.utils.maskgct_utils import build_semantic_model, build_semantic_codec
 
@@ -28,9 +28,6 @@ from indextts.s2mel.modules.campplus.DTDNN import CAMPPlus
 from indextts.s2mel.modules.audio import mel_spectrogram
 
 from indextts.utils.front import TextNormalizer, TextTokenizer
-
-from transformers import AutoTokenizer
-from modelscope import AutoModelForCausalLM
 
 
 class QwenEmotion:
@@ -148,7 +145,7 @@ class IndexTTS2:
             self.use_cuda_kernel = False
             print(">> Be patient, it may take a while to run in CPU mode.")
 
-        self.cfg = OmegaConf.load(cfg_path)
+        self.cfg = load_config(cfg_path)
         self.model_dir = model_dir
         self.dtype = torch.float16 if self.is_fp16 else None
         self.stop_mel_token = self.cfg.gpt.stop_mel_token
@@ -382,8 +379,8 @@ class IndexTTS2:
 
         # 如果参考音频改变了，才需要重新生成, 提升速度
         if self.cache_spk_cond is None or self.cache_spk_audio_prompt != spk_audio_prompt:
-            audio, sr = librosa.load(spk_audio_prompt)
-            audio = torch.tensor(audio).unsqueeze(0)
+            audio, sr = load_audio_mono(spk_audio_prompt, sr=22050)
+            audio = audio.unsqueeze(0)
             audio_22k = torchaudio.transforms.Resample(sr, 22050)(audio)
             audio_16k = torchaudio.transforms.Resample(sr, 16000)(audio)
 
@@ -421,8 +418,8 @@ class IndexTTS2:
             ref_mel = self.cache_mel
 
         if self.cache_emo_cond is None or self.cache_emo_audio_prompt != emo_audio_prompt:
-            emo_audio, _ = librosa.load(emo_audio_prompt, sr=16000)
-            emo_inputs = self.extract_features(emo_audio, sampling_rate=16000, return_tensors="pt")
+            emo_audio, _ = load_audio_mono(emo_audio_prompt, sr=16000)
+            emo_inputs = self.extract_features(emo_audio.numpy(), sampling_rate=16000, return_tensors="pt")
             emo_input_features = emo_inputs["input_features"]
             emo_attention_mask = emo_inputs["attention_mask"]
             emo_input_features = emo_input_features.to(self.device)
