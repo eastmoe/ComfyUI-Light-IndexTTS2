@@ -5,9 +5,26 @@ import time
 from pathlib import Path
 
 from .audio import audio_to_temp_wav, comfy_audio_from_infer_result, comfy_audio_from_wav
-from .constants import CATEGORY, CUDA_KERNEL_OPTIONS, DEVICE_OPTIONS, EMOTION_MODES, MODEL_TYPE, ui
+from .constants import (
+    CATEGORY,
+    CUDA_KERNEL_OPTIONS,
+    DEVICE_OPTIONS,
+    EMOTION_MODES,
+    HF_SOURCE_OPTIONS,
+    MODEL_TYPE,
+    PRECISION_OPTIONS,
+    ui,
+)
 from .paths import default_model_dir, resolve_output_path
-from .runtime import IndexTTS2ModelHandle, cleanup_torch_memory, load_model_handle, set_seed
+from .runtime import (
+    IndexTTS2ModelHandle,
+    cleanup_torch_memory,
+    download_model_snapshot,
+    load_model_handle,
+    set_seed,
+    unload_model_handle,
+    validate_model_files,
+)
 
 
 class ComfyLightIndexTTS2LoadModel:
@@ -33,11 +50,11 @@ class ComfyLightIndexTTS2LoadModel:
                 ),
                 "device": (
                     DEVICE_OPTIONS,
-                    ui("设备", "auto 会优先使用 CUDA，其次 MPS，最后 CPU。"),
+                    ui("计算设备", "auto 会优先使用 CUDA，其次 Intel XPU、MPS，最后 CPU。"),
                 ),
-                "fp16": (
-                    "BOOLEAN",
-                    ui("FP16", "在 CUDA 上使用半精度推理；CPU/MPS 会自动关闭。", default=True),
+                "precision": (
+                    PRECISION_OPTIONS,
+                    ui("计算精度", "选择模型推理计算精度。FP8 依赖当前 PyTorch 和设备支持。"),
                 ),
                 "cuda_kernel": (
                     CUDA_KERNEL_OPTIONS,
@@ -61,15 +78,18 @@ class ComfyLightIndexTTS2LoadModel:
         model_dir: str = "auto",
         config_path: str = "auto",
         device: str = "auto",
-        fp16: bool = True,
+        precision: str = "FP16",
         cuda_kernel: str = "auto",
         reload_model: bool = False,
+        fp16: bool | None = None,
     ):
+        if fp16 is not None:
+            precision = "FP16" if bool(fp16) else "FP32"
         handle = load_model_handle(
             model_dir=model_dir,
             config_path=config_path,
             device=device,
-            fp16=bool(fp16),
+            precision=precision,
             cuda_kernel=cuda_kernel,
             reload_model=bool(reload_model),
         )
@@ -77,9 +97,139 @@ class ComfyLightIndexTTS2LoadModel:
             "model_dir": str(handle.model_dir),
             "config_path": str(handle.config_path),
             "device": handle.device,
-            "fp16": handle.fp16,
+            "precision": handle.precision,
             "cuda_kernel": handle.cuda_kernel,
             "default_model_dir": str(default_model_dir()),
+        }
+        return (handle, json.dumps(info, ensure_ascii=False, indent=2))
+
+
+class ComfyLightIndexTTS2OnlineLoadModel:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "repo_id": (
+                    "STRING",
+                    ui("模型仓库", "Hugging Face 模型仓库 ID。默认下载 IndexTeam/IndexTTS-2。", default="IndexTeam/IndexTTS-2"),
+                ),
+                "revision": (
+                    "STRING",
+                    ui("版本", "分支、标签或提交哈希。", default="main"),
+                ),
+                "local_dir": (
+                    "STRING",
+                    ui("本地模型目录", "模型下载与加载目录。auto 使用 ComfyUI/models/IndexTTS2。", default="auto"),
+                ),
+                "config_path": (
+                    "STRING",
+                    ui("配置文件", "config.yaml 路径。auto 使用本地模型目录下的 config.yaml。", default="auto"),
+                ),
+                "download_source": (
+                    HF_SOURCE_OPTIONS,
+                    ui("下载源", "选择 huggingface、hf-mirror 或自定义 Hugging Face 反向代理。"),
+                ),
+                "custom_endpoint": (
+                    "STRING",
+                    ui("自定义端点", "自定义反向代理地址，可填写 host name、IP address 或完整 URL。", default=""),
+                ),
+                "disable_ssl_verification": (
+                    "BOOLEAN",
+                    ui("关闭 SSL 证书验证", "跳过 HTTPS 证书校验；仅在自签名代理或受控内网中使用。", default=False),
+                ),
+                "device": (
+                    DEVICE_OPTIONS,
+                    ui("计算设备", "auto 会优先使用 CUDA，其次 Intel XPU、MPS，最后 CPU。"),
+                ),
+                "precision": (
+                    PRECISION_OPTIONS,
+                    ui("计算精度", "选择模型推理计算精度。FP8 依赖当前 PyTorch 和设备支持。"),
+                ),
+                "cuda_kernel": (
+                    CUDA_KERNEL_OPTIONS,
+                    ui("BigVGAN CUDA 内核", "auto 使用 IndexTTS2 默认策略；仅 CUDA 可用。"),
+                ),
+                "force_download": (
+                    "BOOLEAN",
+                    ui("强制重新下载", "忽略已有快照文件并重新从远端下载。", default=False),
+                ),
+                "reload_model": (
+                    "BOOLEAN",
+                    ui("重新加载", "忽略模型缓存并重新实例化。", default=False),
+                ),
+            },
+            "optional": {
+                "allow_patterns": (
+                    "STRING",
+                    ui("下载白名单", "逗号分隔的文件匹配规则；为空表示下载仓库默认内容。", default=""),
+                ),
+                "ignore_patterns": (
+                    "STRING",
+                    ui("下载黑名单", "逗号分隔的排除匹配规则。", default=""),
+                ),
+            },
+        }
+
+    RETURN_TYPES = (MODEL_TYPE, "STRING")
+    RETURN_NAMES = ("模型", "信息")
+    FUNCTION = "load"
+    CATEGORY = CATEGORY
+    DESCRIPTION = "从 Hugging Face、hf-mirror 或自定义反向代理下载并加载 IndexTTS2 模型。"
+
+    def load(
+        self,
+        repo_id: str = "IndexTeam/IndexTTS-2",
+        revision: str = "main",
+        local_dir: str = "auto",
+        config_path: str = "auto",
+        download_source: str = "huggingface",
+        custom_endpoint: str = "",
+        disable_ssl_verification: bool = False,
+        device: str = "auto",
+        precision: str = "FP16",
+        cuda_kernel: str = "auto",
+        force_download: bool = False,
+        reload_model: bool = False,
+        allow_patterns: str = "",
+        ignore_patterns: str = "",
+    ):
+        model_dir, endpoint = download_model_snapshot(
+            repo_id=repo_id,
+            local_dir=local_dir,
+            revision=revision,
+            source=download_source,
+            custom_endpoint=custom_endpoint,
+            disable_ssl_verification=bool(disable_ssl_verification),
+            force_download=bool(force_download),
+            allow_patterns=allow_patterns,
+            ignore_patterns=ignore_patterns,
+        )
+        resolved_config = model_dir / "config.yaml" if (config_path or "auto").strip().lower() == "auto" else Path(config_path).expanduser()
+        if not resolved_config.is_absolute():
+            resolved_config = model_dir / resolved_config
+        checked = validate_model_files(model_dir, resolved_config.resolve())
+        handle = load_model_handle(
+            model_dir=str(model_dir),
+            config_path=str(resolved_config),
+            device=device,
+            precision=precision,
+            cuda_kernel=cuda_kernel,
+            reload_model=bool(reload_model),
+            hf_source=download_source,
+            custom_endpoint=custom_endpoint,
+            disable_ssl_verification=bool(disable_ssl_verification),
+        )
+        info = {
+            "repo_id": repo_id,
+            "revision": revision,
+            "endpoint": endpoint,
+            "model_dir": str(handle.model_dir),
+            "config_path": str(handle.config_path),
+            "validated_items": checked,
+            "device": handle.device,
+            "precision": handle.precision,
+            "cuda_kernel": handle.cuda_kernel,
+            "ssl_verification": not bool(disable_ssl_verification),
         }
         return (handle, json.dumps(info, ensure_ascii=False, indent=2))
 
@@ -180,6 +330,10 @@ class ComfyLightIndexTTS2Infer:
                 ),
                 "overwrite": ("BOOLEAN", ui("覆盖输出", "输出路径存在时是否覆盖。", default=True)),
                 "verbose": ("BOOLEAN", ui("详细日志", "打印 infer.py 的详细推理诊断。", default=False)),
+                "unload_model_after_generation": (
+                    "BOOLEAN",
+                    ui("生成后卸载模型", "生成结束后从插件缓存中卸载模型并清理显存缓存。", default=False),
+                ),
             },
             "optional": {
                 "emotion_audio": ("AUDIO", ui("情感参考音频", "emotion_audio 模式使用的 ComfyUI AUDIO。")),
@@ -238,10 +392,13 @@ class ComfyLightIndexTTS2Infer:
         output_path: str = "",
         overwrite: bool = True,
         verbose: bool = False,
+        unload_model_after_generation: bool = False,
         emotion_audio=None,
     ):
         if not isinstance(indextts2_model, IndexTTS2ModelHandle):
             raise TypeError("IndexTTS2 model handle is invalid. Please connect the model loader node.")
+        if indextts2_model.model is None:
+            raise RuntimeError("IndexTTS2 model has been unloaded. Please run the model loader node again.")
 
         synth_text = self._read_text(text, text_file_path)
         self._validate_generation(top_p, top_k, temperature, typical_mass, diffusion_steps, cfg_rate, cfm_temperature, length_scale)
@@ -282,56 +439,62 @@ class ComfyLightIndexTTS2Infer:
             raise FileExistsError(f"Output file exists and overwrite is disabled: {resolved_output}")
 
         use_speed = float(target_duration_seconds) > 0.0
-        result = indextts2_model.model.infer(
-            spk_audio_prompt=str(speaker_path),
-            text=synth_text,
-            output_path=str(resolved_output) if resolved_output is not None else None,
-            emo_audio_prompt=str(emo_audio_prompt) if emo_audio_prompt is not None else None,
-            emo_alpha=effective_emo_alpha,
-            emo_vector=emo_vector,
-            use_emo_text=use_emo_text,
-            emo_text=effective_emo_text,
-            emo_text_weight=float(emo_text_weight),
-            use_speed=use_speed,
-            target_dur=float(target_duration_seconds) if use_speed else None,
-            verbose=bool(verbose),
-            max_text_tokens_per_sentence=int(max_text_tokens_per_sentence),
-            do_sample=bool(do_sample),
-            top_p=float(top_p),
-            top_k=int(top_k),
-            temperature=float(temperature),
-            num_beams=int(num_beams),
-            length_penalty=float(length_penalty),
-            repetition_penalty=float(repetition_penalty),
-            max_mel_tokens=int(max_mel_tokens),
-            typical_sampling=bool(typical_sampling),
-            typical_mass=float(typical_mass),
-            diffusion_steps=int(diffusion_steps),
-            inference_cfg_rate=float(cfg_rate),
-            cfm_temperature=float(cfm_temperature),
-            length_scale=float(length_scale),
-        )
+        try:
+            result = indextts2_model.model.infer(
+                spk_audio_prompt=str(speaker_path),
+                text=synth_text,
+                output_path=str(resolved_output) if resolved_output is not None else None,
+                emo_audio_prompt=str(emo_audio_prompt) if emo_audio_prompt is not None else None,
+                emo_alpha=effective_emo_alpha,
+                emo_vector=emo_vector,
+                use_emo_text=use_emo_text,
+                emo_text=effective_emo_text,
+                emo_text_weight=float(emo_text_weight),
+                use_speed=use_speed,
+                target_dur=float(target_duration_seconds) if use_speed else None,
+                verbose=bool(verbose),
+                max_text_tokens_per_sentence=int(max_text_tokens_per_sentence),
+                do_sample=bool(do_sample),
+                top_p=float(top_p),
+                top_k=int(top_k),
+                temperature=float(temperature),
+                num_beams=int(num_beams),
+                length_penalty=float(length_penalty),
+                repetition_penalty=float(repetition_penalty),
+                max_mel_tokens=int(max_mel_tokens),
+                typical_sampling=bool(typical_sampling),
+                typical_mass=float(typical_mass),
+                diffusion_steps=int(diffusion_steps),
+                inference_cfg_rate=float(cfg_rate),
+                cfm_temperature=float(cfm_temperature),
+                length_scale=float(length_scale),
+            )
 
-        if resolved_output is not None:
-            audio = comfy_audio_from_wav(Path(result))
-            output_text = str(result)
-        else:
-            audio = comfy_audio_from_infer_result(result)
-            output_text = ""
+            if resolved_output is not None:
+                audio = comfy_audio_from_wav(Path(result))
+                output_text = str(result)
+            else:
+                audio = comfy_audio_from_infer_result(result)
+                output_text = ""
 
-        info = {
-            "text_length": len(synth_text),
-            "speaker_audio_path": str(speaker_path),
-            "emotion_mode": emotion_mode,
-            "emotion_audio_path": str(emo_audio_prompt) if emo_audio_prompt is not None else "",
-            "output_path": output_text,
-            "sample_rate": audio["sample_rate"],
-            "samples": int(audio["waveform"].shape[-1]),
-            "duration_seconds": int(audio["waveform"].shape[-1]) / float(audio["sample_rate"]),
-            "seed": int(seed),
-        }
-        cleanup_torch_memory()
-        return (audio, output_text, json.dumps(info, ensure_ascii=False, indent=2))
+            info = {
+                "text_length": len(synth_text),
+                "speaker_audio_path": str(speaker_path),
+                "emotion_mode": emotion_mode,
+                "emotion_audio_path": str(emo_audio_prompt) if emo_audio_prompt is not None else "",
+                "output_path": output_text,
+                "sample_rate": audio["sample_rate"],
+                "samples": int(audio["waveform"].shape[-1]),
+                "duration_seconds": int(audio["waveform"].shape[-1]) / float(audio["sample_rate"]),
+                "seed": int(seed),
+                "model_unloaded": bool(unload_model_after_generation),
+            }
+            return (audio, output_text, json.dumps(info, ensure_ascii=False, indent=2))
+        finally:
+            if bool(unload_model_after_generation):
+                unload_model_handle(indextts2_model)
+            else:
+                cleanup_torch_memory()
 
     @staticmethod
     def _read_text(text: str, text_file_path: str) -> str:
@@ -379,10 +542,12 @@ class ComfyLightIndexTTS2Infer:
 
 NODE_CLASS_MAPPINGS = {
     "ComfyLightIndexTTS2LoadModel": ComfyLightIndexTTS2LoadModel,
+    "ComfyLightIndexTTS2OnlineLoadModel": ComfyLightIndexTTS2OnlineLoadModel,
     "ComfyLightIndexTTS2Infer": ComfyLightIndexTTS2Infer,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ComfyLightIndexTTS2LoadModel": "加载 IndexTTS2 模型",
+    "ComfyLightIndexTTS2OnlineLoadModel": "在线加载 IndexTTS2 模型",
     "ComfyLightIndexTTS2Infer": "IndexTTS2 语音合成",
 }

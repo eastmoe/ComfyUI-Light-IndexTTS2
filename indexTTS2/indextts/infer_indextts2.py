@@ -1,5 +1,5 @@
 import os
-os.environ['HF_HUB_CACHE'] = './checkpoints/hf_cache'
+os.environ.setdefault('HF_HUB_CACHE', './checkpoints/hf_cache')
 import time
 
 import numpy as np
@@ -30,12 +30,53 @@ from indextts.s2mel.modules.audio import mel_spectrogram
 from indextts.utils.front import TextNormalizer, TextTokenizer
 
 
+def _normalize_precision(precision=None, is_fp16=True):
+    if precision is None:
+        return "fp16" if is_fp16 else "fp32"
+    value = str(precision).strip().lower()
+    aliases = {
+        "float8": "fp8",
+        "float16": "fp16",
+        "half": "fp16",
+        "bfloat16": "bf16",
+        "float32": "fp32",
+        "full": "fp32",
+    }
+    value = aliases.get(value, value)
+    if value not in {"fp8", "fp16", "bf16", "fp32"}:
+        raise ValueError(f"Unsupported precision: {precision}")
+    return value
+
+
+def _precision_dtype(precision, device):
+    if precision == "fp32":
+        return None
+    if precision == "fp16":
+        if str(device).startswith(("cuda", "xpu")):
+            return torch.float16
+        return None
+    if precision == "bf16":
+        return torch.bfloat16
+    if precision == "fp8":
+        fp8_dtype = getattr(torch, "float8_e4m3fn", None)
+        if fp8_dtype is None:
+            raise RuntimeError("FP8 requires a PyTorch build with torch.float8_e4m3fn support.")
+        if not str(device).startswith(("cuda", "xpu")):
+            raise RuntimeError("FP8 compute precision requires CUDA or Intel XPU.")
+        return fp8_dtype
+    return None
+
+
+def _weight_dtype(dtype):
+    return dtype if dtype in {torch.float16, torch.bfloat16} else None
+
+
 class QwenEmotion:
-    def __init__(self, model_dir, device):
+    def __init__(self, model_dir, device, dtype=None):
         self.model_dir = model_dir
         self.device = device
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_dir)
-        dtype = torch.float16 if str(device).startswith("cuda") else torch.float32
+        dtype = dtype if dtype in {torch.float16, torch.bfloat16} else torch.float32
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_dir,
             torch_dtype=dtype,
@@ -117,54 +158,67 @@ class QwenEmotion:
 
 class IndexTTS2:
     def __init__(
-        self, cfg_path="checkpoints/config.yaml", model_dir="checkpoints", is_fp16=True, device=None, use_cuda_kernel=None
+        self,
+        cfg_path="checkpoints/config.yaml",
+        model_dir="checkpoints",
+        is_fp16=True,
+        precision=None,
+        device=None,
+        use_cuda_kernel=None,
     ):
         """
         Args:
             cfg_path (str): path to the config file.
             model_dir (str): path to the model directory.
-            is_fp16 (bool): whether to use fp16.
-            device (str): device to use (e.g., 'cuda:0', 'cpu'). If None, it will be set automatically based on the availability of CUDA or MPS.
+            is_fp16 (bool): backward-compatible FP16 switch used when precision is not provided.
+            precision (str): compute precision, one of fp8, fp16, bf16, fp32.
+            device (str): device to use (e.g., 'cuda:0', 'xpu:0', 'cpu'). If None, it will be set automatically based on the availability of CUDA, Intel XPU or MPS.
             use_cuda_kernel (None | bool): whether to use BigVGan custom fused activation CUDA kernel, only for CUDA device.
         """
         if device is not None:
             self.device = device
-            self.is_fp16 = False if device == "cpu" else is_fp16
             self.use_cuda_kernel = use_cuda_kernel is not None and use_cuda_kernel and device.startswith("cuda")
         elif torch.cuda.is_available():
             self.device = "cuda:0"
-            self.is_fp16 = is_fp16
             self.use_cuda_kernel = use_cuda_kernel is None or use_cuda_kernel
+        elif hasattr(torch, "xpu") and torch.xpu.is_available():
+            self.device = "xpu:0"
+            self.use_cuda_kernel = False
         elif hasattr(torch, "mps") and torch.backends.mps.is_available():
             self.device = "mps"
-            self.is_fp16 = False # Use float16 on MPS is overhead than float32
             self.use_cuda_kernel = False
         else:
             self.device = "cpu"
-            self.is_fp16 = False
             self.use_cuda_kernel = False
             print(">> Be patient, it may take a while to run in CPU mode.")
 
+        self.precision_name = _normalize_precision(precision, is_fp16)
+        if str(self.device).startswith("cpu") and self.precision_name in {"fp8", "fp16"}:
+            self.precision_name = "fp32"
+        if str(self.device).startswith("mps") and self.precision_name in {"fp8", "fp16", "bf16"}:
+            self.precision_name = "fp32"
+        self.dtype = _precision_dtype(self.precision_name, self.device)
+        self.model_weight_dtype = _weight_dtype(self.dtype)
+        self.autocast_dtype = self.dtype if self.dtype in {torch.float16, torch.bfloat16} else None
+        self.is_fp16 = self.precision_name == "fp16"
+        if self.precision_name == "fp8":
+            print(">> FP8 selected; components without stable FP8 kernels will use the safest available dtype.")
         self.cfg = load_config(cfg_path)
         self.model_dir = model_dir
-        self.dtype = torch.float16 if self.is_fp16 else None
         self.stop_mel_token = self.cfg.gpt.stop_mel_token
 
-        self.qwen_emo = QwenEmotion(os.path.join(self.model_dir, self.cfg.qwen_emo_path), self.device)
+        self.qwen_emo = QwenEmotion(os.path.join(self.model_dir, self.cfg.qwen_emo_path), self.device, self.model_weight_dtype)
 
         self.gpt = UnifiedVoice(**self.cfg.gpt)
         self.gpt_path = os.path.join(self.model_dir, self.cfg.gpt_checkpoint)
         load_checkpoint(self.gpt, self.gpt_path)
         self.gpt = self.gpt.to(self.device)
-        if self.is_fp16:
-            self.gpt.eval().half()
+        if self.model_weight_dtype is not None:
+            self.gpt.eval().to(dtype=self.model_weight_dtype)
         else:
             self.gpt.eval()
         print(">> GPT weights restored from:", self.gpt_path)
-        if self.is_fp16:
-            self.gpt.post_init_gpt2_config(kv_cache=True, half=True)
-        else:
-            self.gpt.post_init_gpt2_config(kv_cache=True, half=False)
+        self.gpt.post_init_gpt2_config(kv_cache=True, half=self.is_fp16)
 
         if self.use_cuda_kernel:
             try:
@@ -478,7 +532,7 @@ class IndexTTS2:
 
             m_start_time = time.perf_counter()
             with torch.no_grad():
-                with torch.amp.autocast(text_tokens.device.type, enabled=self.dtype is not None, dtype=self.dtype):
+                with torch.amp.autocast(text_tokens.device.type, enabled=self.autocast_dtype is not None, dtype=self.autocast_dtype):
                     emovec = self.gpt.merge_emovec(
                                 spk_cond_emb,
                                 emo_cond_emb,
@@ -549,7 +603,7 @@ class IndexTTS2:
                     use_speed = torch.ones(spk_cond_emb.size(0)).to(spk_cond_emb.device).long()
                 else:
                     use_speed = torch.zeros(spk_cond_emb.size(0)).to(spk_cond_emb.device).long()
-                with torch.amp.autocast(text_tokens.device.type, enabled=self.dtype is not None, dtype=self.dtype):
+                with torch.amp.autocast(text_tokens.device.type, enabled=self.autocast_dtype is not None, dtype=self.autocast_dtype):
                     latent = self.gpt(
                             spk_cond_emb,
                             text_tokens,

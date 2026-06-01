@@ -3,7 +3,7 @@
 # torchaudio>=2.1.2,<2.12
 # transformers>=4.52.1,<6
 # tokenizers>=0.21,<1
-# huggingface_hub # deps provided by transfromers
+# huggingface_hub>=0.23 # deps provided by transformers
 # safetensors==0.5.2
 # numpy>=1.23,<3
 # scipy
