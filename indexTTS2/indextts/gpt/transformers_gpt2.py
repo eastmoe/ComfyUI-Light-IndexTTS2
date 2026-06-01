@@ -31,10 +31,18 @@ from transformers.activations import ACT2FN
 import transformers
 
 from indextts.gpt.transformers_generation_utils import GenerationMixin
-from indextts.gpt.transformers_modeling_utils import PreTrainedModel
-from transformers.modeling_utils import SequenceSummary
+from indextts.gpt.transformers_modeling_utils import PreTrainedModel, SequenceSummary
 
-from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask_for_sdpa, _prepare_4d_causal_attention_mask_for_sdpa
+try:
+    from transformers.modeling_attn_mask_utils import (
+        _prepare_4d_attention_mask_for_sdpa,
+        _prepare_4d_causal_attention_mask_for_sdpa,
+    )
+except (ImportError, AttributeError):
+    from indextts.gpt.transformers_masking_compat import (
+        _prepare_4d_attention_mask_for_sdpa,
+        _prepare_4d_causal_attention_mask_for_sdpa,
+    )
 from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     CausalLMOutputWithCrossAttentions,
@@ -56,7 +64,10 @@ from transformers.utils import (
     logging,
     replace_return_docstrings,
 )
-from transformers.utils.model_parallel_utils import assert_device_map, get_device_map
+try:
+    from transformers.utils.model_parallel_utils import assert_device_map, get_device_map
+except (ImportError, AttributeError):
+    from indextts.utils.compat import assert_device_map, get_device_map
 from transformers.models.gpt2.configuration_gpt2 import GPT2Config
 
 

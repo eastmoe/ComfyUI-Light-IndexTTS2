@@ -1,6 +1,8 @@
 import torch
 from torch import nn
 
+from indextts.utils.compat import torch_load
+
 
 @torch.jit.script
 def fused_add_tanh_sigmoid_multiply(input_a, input_b, n_channels):
@@ -63,7 +65,7 @@ def load_checkpoint2(
     load_ema=False,
 ):
     ignore_modules = ignore_modules or []
-    state = torch.load(path, map_location="cpu")
+    state = torch_load(path, map_location="cpu")
     params = state["net"]
     if load_ema and "ema" in state:
         print("Loading EMA")

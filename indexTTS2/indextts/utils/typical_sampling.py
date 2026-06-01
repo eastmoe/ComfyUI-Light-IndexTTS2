@@ -1,5 +1,17 @@
 import torch
-from transformers import TypicalLogitsWarper as BaseTypicalLogitsWarper
+
+try:
+    from transformers.generation.logits_process import TypicalLogitsWarper as BaseTypicalLogitsWarper
+except (ImportError, AttributeError):
+    try:
+        from transformers import TypicalLogitsWarper as BaseTypicalLogitsWarper
+    except (ImportError, AttributeError):
+        class BaseTypicalLogitsWarper:
+            def __init__(self, mass: float = 0.9, filter_value: float = -float("Inf"), min_tokens_to_keep: int = 1):
+                self.mass = mass
+                self.filter_value = filter_value
+                self.min_tokens_to_keep = min_tokens_to_keep
+
 
 class TypicalLogitsWarper(BaseTypicalLogitsWarper):
     def __init__(self, mass: float = 0.9, filter_value: float = -float("Inf"), min_tokens_to_keep: int = 1):

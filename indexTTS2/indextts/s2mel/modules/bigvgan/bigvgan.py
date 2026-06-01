@@ -21,6 +21,8 @@ from .env import AttrDict
 
 from huggingface_hub import PyTorchModelHubMixin, hf_hub_download
 
+from indextts.utils.compat import torch_load
+
 
 def load_hparams_from_json(path) -> AttrDict:
     with open(path) as f:
@@ -478,7 +480,7 @@ class BigVGAN(
                 local_files_only=local_files_only,
             )
 
-        checkpoint_dict = torch.load(model_file, map_location=map_location)
+        checkpoint_dict = torch_load(model_file, map_location=map_location)
 
         try:
             model.load_state_dict(checkpoint_dict["generator"])

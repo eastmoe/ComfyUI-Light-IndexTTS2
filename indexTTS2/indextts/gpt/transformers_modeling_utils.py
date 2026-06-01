@@ -48,8 +48,29 @@ from indextts.gpt.transformers_generation_utils import GenerationMixin
 from transformers.generation import GenerationConfig
 
 
-from transformers.integrations import PeftAdapterMixin, deepspeed_config, is_deepspeed_zero3_enabled
-from transformers.loss.loss_utils import LOSS_MAPPING
+try:
+    from transformers.integrations import PeftAdapterMixin, deepspeed_config, is_deepspeed_zero3_enabled
+except (ImportError, AttributeError):
+    class PeftAdapterMixin:
+        pass
+
+    def deepspeed_config():
+        return None
+
+    def is_deepspeed_zero3_enabled() -> bool:
+        return False
+
+try:
+    from transformers.loss.loss_utils import LOSS_MAPPING
+except (ImportError, AttributeError):
+    def _causal_lm_loss(logits, labels, vocab_size=None, **kwargs):
+        if labels is None:
+            return None
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous().to(shift_logits.device)
+        return CrossEntropyLoss()(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+
+    LOSS_MAPPING = {"ForCausalLM": _causal_lm_loss}
 from transformers.pytorch_utils import (  # noqa: F401
     Conv1D,
     apply_chunking_to_forward,
@@ -92,12 +113,17 @@ from transformers.utils import (
     is_peft_available,
     is_remote_url,
     is_safetensors_available,
-    is_torch_sdpa_available,
     is_torch_xla_available,
     logging,
     replace_return_docstrings,
     strtobool,
 )
+try:
+    from transformers.utils import is_torch_sdpa_available
+except (ImportError, AttributeError):
+    def is_torch_sdpa_available() -> bool:
+        return hasattr(torch.nn.functional, "scaled_dot_product_attention")
+
 from transformers.utils.hub import convert_file_size_to_int, create_and_tag_model_card, get_checkpoint_shard_files
 from transformers.utils.import_utils import (
     ENV_VARS_TRUE_VALUES,

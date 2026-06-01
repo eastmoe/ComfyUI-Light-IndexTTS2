@@ -19,6 +19,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 from indextts.gpt.model_v2 import UnifiedVoice
 from indextts.utils.checkpoint import load_checkpoint
+from indextts.utils.compat import torch_load
 from indextts.utils.maskgct_utils import build_semantic_model, build_semantic_codec
 
 from indextts.s2mel.modules.commons import load_checkpoint2, MyModel
@@ -213,7 +214,7 @@ class IndexTTS2:
             "funasr/campplus", filename="campplus_cn_common.bin"
         )
         campplus_model = CAMPPlus(feat_dim=80, embedding_size=192)
-        campplus_model.load_state_dict(torch.load(campplus_ckpt_path, map_location="cpu"))
+        campplus_model.load_state_dict(torch_load(campplus_ckpt_path, map_location="cpu"))
         self.campplus_model = campplus_model.to(self.device)
         self.campplus_model.eval()
         print(">> campplus_model weights restored from:", campplus_ckpt_path)
@@ -232,7 +233,7 @@ class IndexTTS2:
         self.tokenizer = TextTokenizer(self.bpe_path, self.normalizer)
         print(">> bpe model loaded from:", self.bpe_path)
 
-        emo_matrix = torch.load(os.path.join(self.model_dir, self.cfg.emo_matrix))
+        emo_matrix = torch_load(os.path.join(self.model_dir, self.cfg.emo_matrix))
         self.emo_matrix = emo_matrix.to(self.device)
 
         mel_fn_args = {

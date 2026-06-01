@@ -21,9 +21,11 @@ from collections import OrderedDict
 import torch
 import yaml
 
+from indextts.utils.compat import torch_load
+
 
 def load_checkpoint(model: torch.nn.Module, model_pth: str) -> dict:
-    checkpoint = torch.load(model_pth, map_location='cpu')
+    checkpoint = torch_load(model_pth, map_location='cpu')
     checkpoint = checkpoint['model'] if 'model' in checkpoint else checkpoint
     model.load_state_dict(checkpoint, strict=True)
     info_path = re.sub('.pth$', '.yaml', model_pth)

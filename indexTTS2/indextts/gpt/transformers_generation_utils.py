@@ -25,20 +25,51 @@ import torch.distributed as dist
 from torch import nn
 from torch.nn import functional as F
 
-from transformers.cache_utils import (
-    Cache,
-    DynamicCache,
-    EncoderDecoderCache,
-    OffloadedCache,
-    QuantizedCacheConfig,
-    StaticCache,
-)
+from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache, StaticCache
+
+try:
+    from transformers.cache_utils import OffloadedCache
+except (ImportError, AttributeError):
+    class OffloadedCache(DynamicCache):
+        pass
+
+try:
+    from transformers.cache_utils import QuantizedCacheConfig
+except (ImportError, AttributeError):
+    class QuantizedCacheConfig:
+        def __init__(self, backend: str = "quanto", **kwargs):
+            self.backend = backend
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
 from transformers.configuration_utils import PretrainedConfig
-from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-from transformers.integrations.fsdp import is_fsdp_managed_module
+try:
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+except (ImportError, AttributeError):
+    try:
+        from transformers.integrations import is_deepspeed_zero3_enabled
+    except (ImportError, AttributeError):
+        def is_deepspeed_zero3_enabled() -> bool:
+            return False
+
+try:
+    from transformers.integrations.fsdp import is_fsdp_managed_module
+except (ImportError, AttributeError):
+    try:
+        from transformers.integrations import is_fsdp_managed_module
+    except (ImportError, AttributeError):
+        def is_fsdp_managed_module(module) -> bool:
+            return False
+
 from transformers.modeling_outputs import CausalLMOutputWithPast, Seq2SeqLMOutput
-from transformers.pytorch_utils import isin_mps_friendly
-from transformers.tokenization_utils import ExtensionsTrie
+try:
+    from transformers.pytorch_utils import isin_mps_friendly
+except (ImportError, AttributeError):
+    from indextts.utils.compat import isin_mps_friendly
+try:
+    from transformers.tokenization_utils import ExtensionsTrie
+except (ImportError, AttributeError):
+    from transformers.tokenization_python import ExtensionsTrie
 from transformers.utils import (
     ModelOutput,
     is_accelerate_available,
@@ -48,23 +79,95 @@ from transformers.utils import (
     is_torchdynamo_compiling,
     logging,
 )
-from transformers.generation.beam_constraints import DisjunctiveConstraint, PhrasalConstraint
-from transformers.generation.beam_search import BeamScorer, BeamSearchScorer, ConstrainedBeamSearchScorer
+try:
+    from transformers.generation.beam_constraints import DisjunctiveConstraint, PhrasalConstraint
+    from transformers.generation.beam_search import BeamScorer, BeamSearchScorer, ConstrainedBeamSearchScorer
+except (ImportError, AttributeError):
+    class _UnavailableBeamFeature:
+        def __init__(self, *args, **kwargs):
+            raise ImportError(
+                "This Transformers version no longer exposes the legacy beam-search helpers used by "
+                "IndexTTS' vendored generation code. Use sampling/greedy generation or install "
+                "transformers<5 for beam-search generation."
+            )
+
+    class BeamScorer(_UnavailableBeamFeature):
+        pass
+
+    class BeamSearchScorer(_UnavailableBeamFeature):
+        pass
+
+    class ConstrainedBeamSearchScorer(_UnavailableBeamFeature):
+        pass
+
+    class DisjunctiveConstraint(_UnavailableBeamFeature):
+        pass
+
+    class PhrasalConstraint(_UnavailableBeamFeature):
+        pass
+
 from transformers.generation.candidate_generator import (
     AssistedCandidateGenerator,
     AssistedCandidateGeneratorDifferentTokenizers,
     CandidateGenerator,
     PromptLookupCandidateGenerator,
-    _crop_past_key_values,
     _prepare_attention_mask,
     _prepare_token_type_ids,
 )
+try:
+    from transformers.generation.candidate_generator import _crop_past_key_values
+except (ImportError, AttributeError):
+    def _crop_past_key_values(model, past_key_values, max_length):
+        new_past = []
+        if isinstance(past_key_values, Cache):
+            past_key_values.crop(max_length)
+        elif model.config.is_encoder_decoder:
+            for idx in range(len(past_key_values)):
+                new_past.append(
+                    (
+                        past_key_values[idx][0][:, :, :max_length, :],
+                        past_key_values[idx][1][:, :, :max_length, :],
+                        past_key_values[idx][2],
+                        past_key_values[idx][3],
+                    )
+                )
+            past_key_values = tuple(new_past)
+        elif "gptbigcode" in model.__class__.__name__.lower() or (
+            model.config.architectures is not None and "gptbigcode" in model.config.architectures[0].lower()
+        ):
+            if model.config.multi_query:
+                for idx in range(len(past_key_values)):
+                    past_key_values[idx] = past_key_values[idx][:, :max_length, :]
+            else:
+                for idx in range(len(past_key_values)):
+                    past_key_values[idx] = past_key_values[idx][:, :, :max_length, :]
+        elif past_key_values is not None:
+            for idx in range(len(past_key_values)):
+                if past_key_values[idx] != ([], []):
+                    new_past.append(
+                        (
+                            past_key_values[idx][0][:, :, :max_length, :],
+                            past_key_values[idx][1][:, :, :max_length, :],
+                        )
+                    )
+                else:
+                    new_past.append((past_key_values[idx][0], past_key_values[idx][1]))
+            past_key_values = tuple(new_past)
+        return past_key_values
+
 from transformers.generation.configuration_utils import (
-    NEED_SETUP_CACHE_CLASSES_MAPPING,
-    QUANT_BACKEND_CLASSES_MAPPING,
     GenerationConfig,
     GenerationMode,
 )
+try:
+    from transformers.generation.configuration_utils import NEED_SETUP_CACHE_CLASSES_MAPPING
+except (ImportError, AttributeError):
+    NEED_SETUP_CACHE_CLASSES_MAPPING = {"static": StaticCache}
+
+try:
+    from transformers.generation.configuration_utils import QUANT_BACKEND_CLASSES_MAPPING
+except (ImportError, AttributeError):
+    QUANT_BACKEND_CLASSES_MAPPING = {}
 from transformers.generation.logits_process import (
     EncoderNoRepeatNGramLogitsProcessor,
     EncoderRepetitionPenaltyLogitsProcessor,
@@ -73,7 +176,6 @@ from transformers.generation.logits_process import (
     ExponentialDecayLengthPenalty,
     ForcedBOSTokenLogitsProcessor,
     ForcedEOSTokenLogitsProcessor,
-    HammingDiversityLogitsProcessor,
     InfNanRemoveLogitsProcessor,
     LogitNormalization,
     LogitsProcessorList,
@@ -93,8 +195,17 @@ from transformers.generation.logits_process import (
     TypicalLogitsWarper,
     UnbatchedClassifierFreeGuidanceLogitsProcessor,
 )
+try:
+    from transformers.generation.logits_process import HammingDiversityLogitsProcessor
+except (ImportError, AttributeError):
+    class HammingDiversityLogitsProcessor:
+        def __init__(self, *args, **kwargs):
+            raise ImportError(
+                "This Transformers version no longer exposes HammingDiversityLogitsProcessor. "
+                "Set diversity_penalty=0 or install transformers<5."
+            )
+
 from transformers.generation.stopping_criteria import (
-    ConfidenceCriteria,
     EosTokenCriteria,
     MaxLengthCriteria,
     MaxTimeCriteria,
@@ -102,6 +213,16 @@ from transformers.generation.stopping_criteria import (
     StoppingCriteriaList,
     StopStringCriteria,
 )
+
+try:
+    from transformers.generation.stopping_criteria import ConfidenceCriteria
+except (ImportError, AttributeError):
+    class ConfidenceCriteria(StoppingCriteria):
+        def __init__(self, assistant_confidence_threshold: float | None = None):
+            self.assistant_confidence_threshold = assistant_confidence_threshold
+
+        def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> torch.BoolTensor:
+            return torch.zeros((input_ids.shape[0],), device=input_ids.device, dtype=torch.bool)
 
 
 if TYPE_CHECKING:
