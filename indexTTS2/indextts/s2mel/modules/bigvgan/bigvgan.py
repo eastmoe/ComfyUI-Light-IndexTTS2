@@ -6,6 +6,7 @@
 
 import os
 import json
+import inspect
 from pathlib import Path
 from typing import Optional, Union, Dict
 
@@ -22,6 +23,16 @@ from .env import AttrDict
 from huggingface_hub import PyTorchModelHubMixin, hf_hub_download
 
 from indextts.utils.compat import torch_load
+
+
+_HF_HUB_DOWNLOAD_PARAMS = set(inspect.signature(hf_hub_download).parameters)
+
+
+def _hf_hub_download_compat(**kwargs):
+    """Call hf_hub_download across huggingface_hub API versions."""
+    return hf_hub_download(
+        **{key: value for key, value in kwargs.items() if key in _HF_HUB_DOWNLOAD_PARAMS}
+    )
 
 
 def load_hparams_from_json(path) -> AttrDict:
@@ -417,13 +428,13 @@ class BigVGAN(
             cls,
             *,
             model_id: str,
-            revision: str,
-            cache_dir: str,
-            force_download: bool,
-            proxies: Optional[Dict],
-            resume_download: bool,
-            local_files_only: bool,
-            token: Union[str, bool, None],
+            revision: Optional[str] = None,
+            cache_dir: Optional[Union[str, Path]] = None,
+            force_download: bool = False,
+            proxies: Optional[Dict] = None,
+            resume_download: Optional[bool] = None,
+            local_files_only: bool = False,
+            token: Union[str, bool, None] = None,
             map_location: str = "cpu",  # Additional argument
             strict: bool = False,  # Additional argument
             use_cuda_kernel: bool = False,
@@ -436,7 +447,7 @@ class BigVGAN(
             print("Loading config.json from local directory")
             config_file = os.path.join(model_id, "config.json")
         else:
-            config_file = hf_hub_download(
+            config_file = _hf_hub_download_compat(
                 repo_id=model_id,
                 filename="config.json",
                 revision=revision,
@@ -468,7 +479,7 @@ class BigVGAN(
             model_file = os.path.join(model_id, "bigvgan_generator.pt")
         else:
             print(f"Loading weights from {model_id}")
-            model_file = hf_hub_download(
+            model_file = _hf_hub_download_compat(
                 repo_id=model_id,
                 filename="bigvgan_generator.pt",
                 revision=revision,
