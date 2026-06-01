@@ -13,7 +13,8 @@
 
 # modelscope # replaced by transformers.AutoModelForCausalLM
 # omegaconf # replaced by PyYAML + indextts.utils.config.AttrDict
-sentencepiece
 # librosa>=0.10.2.post1,<0.12 # replaced by torchaudio
-WeTextProcessing; platform_machine != "Darwin"
+
+sentencepiece
+WeTextProcessing; platform_system != "Darwin"
 wetext; platform_system == "Darwin"
