@@ -9,7 +9,6 @@ from .constants import (
     CATEGORY,
     CUDA_KERNEL_OPTIONS,
     DEVICE_OPTIONS,
-    EMOTION_MODES,
     HF_SOURCE_OPTIONS,
     MODEL_TYPE,
     PRECISION_OPTIONS,
@@ -234,117 +233,80 @@ class ComfyLightIndexTTS2OnlineLoadModel:
         return (handle, json.dumps(info, ensure_ascii=False, indent=2))
 
 
-class ComfyLightIndexTTS2Infer:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "indextts2_model": (MODEL_TYPE, ui("IndexTTS2 模型", "模型加载节点输出的模型句柄。")),
-                "speaker_audio": ("AUDIO", ui("说话人参考音频", "用于克隆音色的 ComfyUI AUDIO。")),
-                "text": (
-                    "STRING",
-                    ui(
-                        "合成文本",
-                        "需要合成的文本。text_file_path 为空时使用这里的内容。",
-                        default="你好，这是一段 IndexTTS2 语音合成测试。",
-                        multiline=True,
-                    ),
-                ),
-                "text_file_path": (
-                    "STRING",
-                    ui("文本文件", "可选 UTF-8 文本文件路径；非空时覆盖合成文本。", default=""),
-                ),
-                "emotion_mode": (
-                    EMOTION_MODES,
-                    ui(
-                        "情感模式",
-                        "speaker_audio 使用说话人参考音频；emotion_audio 使用情感参考音频；emotion_vector 使用八维情感向量；emotion_text 使用文本情感分析。",
-                    ),
-                ),
-                "emo_alpha": (
-                    "FLOAT",
-                    ui("情感音频权重", "仅 emotion_audio 模式有效，对情感参考音频进行混合。", default=1.0, min=0.0, max=2.0, step=0.05),
-                ),
-                "emo_text": (
-                    "STRING",
-                    ui("情感文本", "emotion_text 模式使用的情感文本；为空时使用合成文本。", default="", multiline=True),
-                ),
-                "emo_text_weight": (
-                    "FLOAT",
-                    ui("文本情感权重", "对 Qwen 情感评分结果进行缩放。", default=1.0, min=0.0, max=2.0, step=0.05),
-                ),
-                "emo_happy": ("FLOAT", ui("喜", "emotion_vector 模式：happy 权重。", default=0.0, min=0.0, max=1.2, step=0.01)),
-                "emo_angry": ("FLOAT", ui("怒", "emotion_vector 模式：angry 权重。", default=0.0, min=0.0, max=1.2, step=0.01)),
-                "emo_sad": ("FLOAT", ui("哀", "emotion_vector 模式：sad 权重。", default=0.0, min=0.0, max=1.2, step=0.01)),
-                "emo_fear": ("FLOAT", ui("惧", "emotion_vector 模式：fear 权重。", default=0.0, min=0.0, max=1.2, step=0.01)),
-                "emo_hate": ("FLOAT", ui("厌恶", "emotion_vector 模式：hate 权重。", default=0.0, min=0.0, max=1.2, step=0.01)),
-                "emo_low": ("FLOAT", ui("低落", "emotion_vector 模式：low 权重。", default=0.0, min=0.0, max=1.2, step=0.01)),
-                "emo_surprise": ("FLOAT", ui("惊喜", "emotion_vector 模式：surprise 权重。", default=0.0, min=0.0, max=1.2, step=0.01)),
-                "emo_neutral": ("FLOAT", ui("自然", "emotion_vector 模式：neutral 权重。", default=1.0, min=0.0, max=1.2, step=0.01)),
-                "target_duration_seconds": (
-                    "FLOAT",
-                    ui("目标时长", "大于 0 时启用 infer.py 的 target_dur/use_speed 控制。", default=0.0, min=0.0, max=3600.0, step=0.1),
-                ),
-                "max_text_tokens_per_sentence": (
-                    "INT",
-                    ui("单句最大文本 Token", "长文本按此上限切分。", default=120, min=1, max=4096, step=1),
-                ),
-                "length_scale": (
-                    "FLOAT",
-                    ui("长度比例", "语义 token 长度到声学目标长度的比例。", default=1.72, min=0.01, max=10.0, step=0.01),
-                ),
-                "do_sample": ("BOOLEAN", ui("启用采样", "开启 GPT 采样；关闭时更偏确定性。", default=True)),
-                "top_p": ("FLOAT", ui("Top P", "核采样 top_p，范围 (0, 1]。", default=0.8, min=0.01, max=1.0, step=0.01)),
-                "top_k": ("INT", ui("Top K", "Top-k 采样；0 表示不限制。", default=30, min=0, max=4096, step=1)),
-                "temperature": ("FLOAT", ui("温度", "GPT 采样温度。", default=0.8, min=0.01, max=5.0, step=0.01)),
-                "num_beams": ("INT", ui("Beam 数", "束搜索数量。", default=3, min=1, max=64, step=1)),
-                "length_penalty": ("FLOAT", ui("长度惩罚", "生成长度惩罚。", default=0.0, min=-10.0, max=10.0, step=0.1)),
-                "repetition_penalty": (
-                    "FLOAT",
-                    ui("重复惩罚", "生成重复惩罚。", default=10.0, min=0.0, max=50.0, step=0.1),
-                ),
-                "max_mel_tokens": ("INT", ui("最大 Mel Token", "生成 mel token 的最大数量。", default=1500, min=1, max=8192, step=1)),
-                "typical_sampling": ("BOOLEAN", ui("Typical Sampling", "启用 infer.py 的 typical sampling 参数。", default=False)),
-                "typical_mass": ("FLOAT", ui("Typical Mass", "Typical sampling mass，范围 (0, 1)。", default=0.9, min=0.01, max=0.99, step=0.01)),
-                "diffusion_steps": ("INT", ui("扩散步数", "S2Mel CFM 扩散步数。", default=25, min=1, max=256, step=1)),
-                "cfg_rate": (
-                    "FLOAT",
-                    ui("CFG Rate", "Classifier-free guidance rate。", default=0.7, min=0.0, max=10.0, step=0.05),
-                ),
-                "cfm_temperature": (
-                    "FLOAT",
-                    ui("CFM 温度", "CFM 初始噪声温度。", default=1.0, min=0.01, max=5.0, step=0.01),
-                ),
-                "seed": ("INT", ui("随机种子", "-1 表示不固定随机种子。", default=-1, min=-1, max=0x7FFFFFFF, step=1)),
-                "speaker_batch_index": (
-                    "INT",
-                    ui("说话人音频批次", "当 AUDIO 含多个 batch 时选择参考音频批次。", default=0, min=0, max=4096, step=1),
-                ),
-                "emotion_batch_index": (
-                    "INT",
-                    ui("情感音频批次", "当情感 AUDIO 含多个 batch 时选择参考音频批次。", default=0, min=0, max=4096, step=1),
-                ),
-                "output_path": (
-                    "STRING",
-                    ui("输出路径", "可选 wav 输出路径。相对路径写入 ComfyUI 输出目录；为空则只返回 AUDIO。", default=""),
-                ),
-                "overwrite": ("BOOLEAN", ui("覆盖输出", "输出路径存在时是否覆盖。", default=True)),
-                "verbose": ("BOOLEAN", ui("详细日志", "打印 infer.py 的详细推理诊断。", default=False)),
-                "unload_model_after_generation": (
-                    "BOOLEAN",
-                    ui("生成后卸载模型", "生成结束后从插件缓存中卸载模型并清理显存缓存。", default=False),
-                ),
-            },
-            "optional": {
-                "emotion_audio": ("AUDIO", ui("情感参考音频", "emotion_audio 模式使用的 ComfyUI AUDIO。")),
-            },
-        }
+def common_infer_inputs() -> dict:
+    return {
+        "indextts2_model": (MODEL_TYPE, ui("IndexTTS2 模型", "模型加载节点输出的模型句柄。")),
+        "speaker_audio": ("AUDIO", ui("说话人参考音频", "用于克隆音色的 ComfyUI AUDIO。")),
+        "text": (
+            "STRING",
+            ui(
+                "合成文本",
+                "需要合成的文本。text_file_path 为空时使用这里的内容。",
+                default="你好，这是一段 IndexTTS2 语音合成测试。",
+                multiline=True,
+            ),
+        ),
+        "text_file_path": (
+            "STRING",
+            ui("文本文件", "可选 UTF-8 文本文件路径；非空时覆盖合成文本。", default=""),
+        ),
+        "target_duration_seconds": (
+            "FLOAT",
+            ui("目标时长", "大于 0 时启用 infer.py 的 target_dur/use_speed 控制。", default=0.0, min=0.0, max=3600.0, step=0.1),
+        ),
+        "max_text_tokens_per_sentence": (
+            "INT",
+            ui("单句最大文本 Token", "长文本按此上限切分。", default=120, min=1, max=4096, step=1),
+        ),
+        "length_scale": (
+            "FLOAT",
+            ui("长度比例", "语义 token 长度到声学目标长度的比例。", default=1.72, min=0.01, max=10.0, step=0.01),
+        ),
+        "do_sample": ("BOOLEAN", ui("启用采样", "开启 GPT 采样；关闭时更偏确定性。", default=True)),
+        "top_p": ("FLOAT", ui("Top P", "核采样 top_p，范围 (0, 1]。", default=0.8, min=0.01, max=1.0, step=0.01)),
+        "top_k": ("INT", ui("Top K", "Top-k 采样；0 表示不限制。", default=30, min=0, max=4096, step=1)),
+        "temperature": ("FLOAT", ui("温度", "GPT 采样温度。", default=0.8, min=0.01, max=5.0, step=0.01)),
+        "num_beams": ("INT", ui("束搜索数量", "Beam search 的候选束数量。", default=3, min=1, max=64, step=1)),
+        "length_penalty": ("FLOAT", ui("长度惩罚", "生成长度惩罚。", default=0.0, min=-10.0, max=10.0, step=0.1)),
+        "repetition_penalty": (
+            "FLOAT",
+            ui("重复惩罚", "生成重复惩罚。", default=10.0, min=0.0, max=50.0, step=0.1),
+        ),
+        "max_mel_tokens": ("INT", ui("最大 Mel Token", "生成 mel token 的最大数量。", default=1500, min=1, max=8192, step=1)),
+        "typical_sampling": ("BOOLEAN", ui("Typical Sampling", "启用 infer.py 的 typical sampling 参数。", default=False)),
+        "typical_mass": ("FLOAT", ui("Typical Mass", "Typical sampling mass，范围 (0, 1)。", default=0.9, min=0.01, max=0.99, step=0.01)),
+        "diffusion_steps": ("INT", ui("扩散步数", "S2Mel CFM 扩散步数。", default=25, min=1, max=256, step=1)),
+        "cfg_rate": (
+            "FLOAT",
+            ui("CFG 强度", "Classifier-free guidance 强度。", default=0.7, min=0.0, max=10.0, step=0.05),
+        ),
+        "cfm_temperature": (
+            "FLOAT",
+            ui("CFM 温度", "CFM 初始噪声温度。", default=1.0, min=0.01, max=5.0, step=0.01),
+        ),
+        "seed": ("INT", ui("随机种子", "-1 表示不固定随机种子。", default=-1, min=-1, max=0x7FFFFFFF, step=1)),
+        "speaker_batch_index": (
+            "INT",
+            ui("说话人音频批次", "当 AUDIO 含多个 batch 时选择参考音频批次。", default=0, min=0, max=4096, step=1),
+        ),
+        "output_path": (
+            "STRING",
+            ui("输出路径", "可选 wav 输出路径。相对路径写入 ComfyUI 输出目录；为空则只返回 AUDIO。", default=""),
+        ),
+        "overwrite": ("BOOLEAN", ui("覆盖输出", "输出路径存在时是否覆盖。", default=True)),
+        "verbose": ("BOOLEAN", ui("详细日志", "打印 infer.py 的详细推理诊断。", default=False)),
+        "unload_model_after_generation": (
+            "BOOLEAN",
+            ui("生成后卸载模型", "生成结束后从插件缓存中卸载模型并清理显存缓存。", default=False),
+        ),
+    }
 
+
+class _ComfyLightIndexTTS2InferBase:
     RETURN_TYPES = ("AUDIO", "STRING", "STRING")
     RETURN_NAMES = ("音频", "输出路径", "信息")
     FUNCTION = "infer"
     CATEGORY = CATEGORY
-    DESCRIPTION = "使用 IndexTTS2 从文本和 ComfyUI AUDIO 参考音频生成语音，覆盖 infer.py 的推理参数。"
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -352,7 +314,13 @@ class ComfyLightIndexTTS2Infer:
             return time.time()
         return None
 
-    def infer(
+    @classmethod
+    def base_input_types(cls):
+        return {
+            "required": common_infer_inputs(),
+        }
+
+    def _infer(
         self,
         indextts2_model,
         speaker_audio,
@@ -405,7 +373,6 @@ class ComfyLightIndexTTS2Infer:
         set_seed(int(seed))
         cleanup_torch_memory()
 
-        speaker_path = audio_to_temp_wav(speaker_audio, "speaker", int(speaker_batch_index))
         emo_audio_prompt = None
         emo_vector = None
         use_emo_text = False
@@ -414,10 +381,18 @@ class ComfyLightIndexTTS2Infer:
 
         if emotion_mode == "emotion_audio":
             if emotion_audio is None:
-                raise ValueError("emotion_audio mode requires the optional emotion_audio input.")
+                raise ValueError("emotion_audio mode requires the emotion_audio input.")
             emo_audio_prompt = audio_to_temp_wav(emotion_audio, "emotion", int(emotion_batch_index))
+            speaker_path = (
+                audio_to_temp_wav(speaker_audio, "speaker", int(speaker_batch_index))
+                if speaker_audio is not None
+                else emo_audio_prompt
+            )
             effective_emo_alpha = float(emo_alpha)
         elif emotion_mode == "emotion_vector":
+            if speaker_audio is None:
+                raise ValueError("emotion_vector mode requires the speaker_audio input.")
+            speaker_path = audio_to_temp_wav(speaker_audio, "speaker", int(speaker_batch_index))
             emo_vector = [
                 float(emo_happy),
                 float(emo_angry),
@@ -429,10 +404,17 @@ class ComfyLightIndexTTS2Infer:
                 float(emo_neutral),
             ]
         elif emotion_mode == "emotion_text":
+            if speaker_audio is None:
+                raise ValueError("emotion_text mode requires the speaker_audio input.")
+            speaker_path = audio_to_temp_wav(speaker_audio, "speaker", int(speaker_batch_index))
             use_emo_text = True
             effective_emo_text = (emo_text or "").strip() or None
         elif emotion_mode != "speaker_audio":
             raise ValueError(f"Unsupported emotion_mode: {emotion_mode}")
+        else:
+            if speaker_audio is None:
+                raise ValueError("speaker_audio mode requires the speaker_audio input.")
+            speaker_path = audio_to_temp_wav(speaker_audio, "speaker", int(speaker_batch_index))
 
         resolved_output = resolve_output_path(output_path)
         if resolved_output is not None and resolved_output.is_file() and not bool(overwrite):
@@ -540,14 +522,146 @@ class ComfyLightIndexTTS2Infer:
             raise ValueError("length_scale must be greater than 0.")
 
 
+class ComfyLightIndexTTS2InferSpeaker(_ComfyLightIndexTTS2InferBase):
+    DESCRIPTION = "使用说话人参考音频同时控制音色和情感，生成语音。"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return cls.base_input_types()
+
+    def infer(self, **kwargs):
+        return self._infer(emotion_mode="speaker_audio", **kwargs)
+
+
+class ComfyLightIndexTTS2InferEmotionAudio(_ComfyLightIndexTTS2InferBase):
+    DESCRIPTION = "使用独立情感参考音频控制情感表达，生成语音。"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        inputs = cls.base_input_types()
+        required = inputs["required"]
+        speaker_audio = required.pop("speaker_audio")
+        emotion_inputs = {
+            "emotion_audio": ("AUDIO", ui("情感参考音频", "用于控制情感表达的 ComfyUI AUDIO。")),
+            "emo_alpha": (
+                "FLOAT",
+                ui("情感音频权重", "对情感参考音频进行混合。", default=1.0, min=0.0, max=2.0, step=0.05),
+            ),
+            "emotion_batch_index": (
+                "INT",
+                ui("情感音频批次", "当情感 AUDIO 含多个 batch 时选择参考音频批次。", default=0, min=0, max=4096, step=1),
+            ),
+        }
+        for key, value in reversed(emotion_inputs.items()):
+            required = dict(list(required.items())[:1] + [(key, value)] + list(required.items())[1:])
+        inputs["required"] = required
+        inputs["optional"] = {
+            "speaker_audio": (
+                speaker_audio[0],
+                ui("说话人参考音频", "可选；连接后用于控制音色，未连接时使用情感参考音频兼作音色参考。"),
+            )
+        }
+        return inputs
+
+    def infer(self, emotion_audio, emo_alpha: float = 1.0, emotion_batch_index: int = 0, **kwargs):
+        return self._infer(
+            emotion_mode="emotion_audio",
+            emotion_audio=emotion_audio,
+            emo_alpha=emo_alpha,
+            emotion_batch_index=emotion_batch_index,
+            **kwargs,
+        )
+
+
+class ComfyLightIndexTTS2InferEmotionVector(_ComfyLightIndexTTS2InferBase):
+    DESCRIPTION = "使用八维情感向量控制情感表达，生成语音。"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        inputs = cls.base_input_types()
+        inputs["required"].update(
+            {
+                "emo_happy": ("FLOAT", ui("喜悦权重", "happy 情感权重。", default=0.0, min=0.0, max=1.2, step=0.01)),
+                "emo_angry": ("FLOAT", ui("愤怒权重", "angry 情感权重。", default=0.0, min=0.0, max=1.2, step=0.01)),
+                "emo_sad": ("FLOAT", ui("悲伤权重", "sad 情感权重。", default=0.0, min=0.0, max=1.2, step=0.01)),
+                "emo_fear": ("FLOAT", ui("恐惧权重", "fear 情感权重。", default=0.0, min=0.0, max=1.2, step=0.01)),
+                "emo_hate": ("FLOAT", ui("厌恶权重", "hate 情感权重。", default=0.0, min=0.0, max=1.2, step=0.01)),
+                "emo_low": ("FLOAT", ui("低落权重", "low 情感权重。", default=0.0, min=0.0, max=1.2, step=0.01)),
+                "emo_surprise": ("FLOAT", ui("惊喜权重", "surprise 情感权重。", default=0.0, min=0.0, max=1.2, step=0.01)),
+                "emo_neutral": ("FLOAT", ui("自然权重", "neutral 情感权重。", default=1.0, min=0.0, max=1.2, step=0.01)),
+            }
+        )
+        return inputs
+
+    def infer(
+        self,
+        emo_happy: float = 0.0,
+        emo_angry: float = 0.0,
+        emo_sad: float = 0.0,
+        emo_fear: float = 0.0,
+        emo_hate: float = 0.0,
+        emo_low: float = 0.0,
+        emo_surprise: float = 0.0,
+        emo_neutral: float = 1.0,
+        **kwargs,
+    ):
+        return self._infer(
+            emotion_mode="emotion_vector",
+            emo_happy=emo_happy,
+            emo_angry=emo_angry,
+            emo_sad=emo_sad,
+            emo_fear=emo_fear,
+            emo_hate=emo_hate,
+            emo_low=emo_low,
+            emo_surprise=emo_surprise,
+            emo_neutral=emo_neutral,
+            **kwargs,
+        )
+
+
+class ComfyLightIndexTTS2InferEmotionText(_ComfyLightIndexTTS2InferBase):
+    DESCRIPTION = "使用文本情感分析控制情感表达，生成语音。"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        inputs = cls.base_input_types()
+        inputs["required"].update(
+            {
+                "emo_text": (
+                    "STRING",
+                    ui("情感文本", "用于情感分析的文本；为空时使用合成文本。", default="", multiline=True),
+                ),
+                "emo_text_weight": (
+                    "FLOAT",
+                    ui("文本情感权重", "对 Qwen 情感评分结果进行缩放。", default=1.0, min=0.0, max=2.0, step=0.05),
+                ),
+            }
+        )
+        return inputs
+
+    def infer(self, emo_text: str = "", emo_text_weight: float = 1.0, **kwargs):
+        return self._infer(
+            emotion_mode="emotion_text",
+            emo_text=emo_text,
+            emo_text_weight=emo_text_weight,
+            **kwargs,
+        )
+
+
 NODE_CLASS_MAPPINGS = {
     "ComfyLightIndexTTS2LoadModel": ComfyLightIndexTTS2LoadModel,
     "ComfyLightIndexTTS2OnlineLoadModel": ComfyLightIndexTTS2OnlineLoadModel,
-    "ComfyLightIndexTTS2Infer": ComfyLightIndexTTS2Infer,
+    "ComfyLightIndexTTS2InferSpeaker": ComfyLightIndexTTS2InferSpeaker,
+    "ComfyLightIndexTTS2InferEmotionAudio": ComfyLightIndexTTS2InferEmotionAudio,
+    "ComfyLightIndexTTS2InferEmotionVector": ComfyLightIndexTTS2InferEmotionVector,
+    "ComfyLightIndexTTS2InferEmotionText": ComfyLightIndexTTS2InferEmotionText,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ComfyLightIndexTTS2LoadModel": "加载 IndexTTS2 模型",
     "ComfyLightIndexTTS2OnlineLoadModel": "在线加载 IndexTTS2 模型",
-    "ComfyLightIndexTTS2Infer": "IndexTTS2 语音合成",
+    "ComfyLightIndexTTS2InferSpeaker": "IndexTTS2 语音合成（说话人音频）",
+    "ComfyLightIndexTTS2InferEmotionAudio": "IndexTTS2 语音合成（情感音频）",
+    "ComfyLightIndexTTS2InferEmotionVector": "IndexTTS2 语音合成（情感向量）",
+    "ComfyLightIndexTTS2InferEmotionText": "IndexTTS2 语音合成（情感文本）",
 }

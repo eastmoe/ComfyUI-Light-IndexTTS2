@@ -144,9 +144,9 @@
       }
     }
   },
-  "ComfyLightIndexTTS2Infer": {
-    "display_name": "IndexTTS2 语音合成",
-    "description": "使用 IndexTTS2 从文本和 ComfyUI AUDIO 参考音频生成语音。",
+  "ComfyLightIndexTTS2InferSpeaker": {
+    "display_name": "IndexTTS2 语音合成（说话人音频）",
+    "description": "使用说话人参考音频同时控制音色和情感，生成语音。",
     "inputs": {
       "indextts2_model": {
         "name": "IndexTTS2 模型",
@@ -156,10 +156,6 @@
         "name": "说话人参考音频",
         "tooltip": "用于克隆音色的 ComfyUI AUDIO。"
       },
-      "emotion_audio": {
-        "name": "情感参考音频",
-        "tooltip": "emotion_audio 模式使用的 ComfyUI AUDIO。"
-      },
       "text": {
         "name": "合成文本",
         "tooltip": "需要合成的文本。文本文件为空时使用这里的内容。"
@@ -167,60 +163,6 @@
       "text_file_path": {
         "name": "文本文件",
         "tooltip": "可选 UTF-8 文本文件路径；非空时覆盖合成文本。"
-      },
-      "emotion_mode": {
-        "name": "情感模式",
-        "tooltip": "speaker_audio 使用说话人参考音频；emotion_audio 使用情感参考音频；emotion_vector 使用八维情感向量；emotion_text 使用文本情感分析。",
-        "options": {
-          "speaker_audio": "说话人音频",
-          "emotion_audio": "情感音频",
-          "emotion_vector": "情感向量",
-          "emotion_text": "情感文本"
-        }
-      },
-      "emo_alpha": {
-        "name": "情感音频权重",
-        "tooltip": "仅 emotion_audio 模式有效，对情感参考音频进行混合。"
-      },
-      "emo_text": {
-        "name": "情感文本",
-        "tooltip": "emotion_text 模式使用的情感文本；为空时使用合成文本。"
-      },
-      "emo_text_weight": {
-        "name": "文本情感权重",
-        "tooltip": "对 Qwen 情感评分结果进行缩放。"
-      },
-      "emo_happy": {
-        "name": "喜悦权重",
-        "tooltip": "emotion_vector 模式下 happy 情感的权重。"
-      },
-      "emo_angry": {
-        "name": "愤怒权重",
-        "tooltip": "emotion_vector 模式下 angry 情感的权重。"
-      },
-      "emo_sad": {
-        "name": "悲伤权重",
-        "tooltip": "emotion_vector 模式下 sad 情感的权重。"
-      },
-      "emo_fear": {
-        "name": "恐惧权重",
-        "tooltip": "emotion_vector 模式下 fear 情感的权重。"
-      },
-      "emo_hate": {
-        "name": "厌恶权重",
-        "tooltip": "emotion_vector 模式下 hate 情感的权重。"
-      },
-      "emo_low": {
-        "name": "低落权重",
-        "tooltip": "emotion_vector 模式下 low 情感的权重。"
-      },
-      "emo_surprise": {
-        "name": "惊喜权重",
-        "tooltip": "emotion_vector 模式下 surprise 情感的权重。"
-      },
-      "emo_neutral": {
-        "name": "自然权重",
-        "tooltip": "emotion_vector 模式下 neutral 情感的权重。"
       },
       "target_duration_seconds": {
         "name": "目标时长",
@@ -294,9 +236,141 @@
         "name": "说话人音频批次",
         "tooltip": "当 AUDIO 含多个 batch 时选择参考音频批次。"
       },
+      "output_path": {
+        "name": "输出路径",
+        "tooltip": "可选 wav 输出路径。相对路径写入 ComfyUI 输出目录；为空则只返回 AUDIO。"
+      },
+      "overwrite": {
+        "name": "覆盖输出",
+        "tooltip": "输出路径存在时是否覆盖。"
+      },
+      "verbose": {
+        "name": "详细日志",
+        "tooltip": "打印详细推理诊断。"
+      },
+      "unload_model_after_generation": {
+        "name": "生成后卸载模型",
+        "tooltip": "生成结束后从插件缓存中卸载模型并清理显存缓存。"
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "音频",
+        "tooltip": "合成后的 ComfyUI AUDIO。"
+      },
+      "1": {
+        "name": "输出路径",
+        "tooltip": "保存的 wav 文件路径；未保存时为空。"
+      },
+      "2": {
+        "name": "信息",
+        "tooltip": "语音合成信息，JSON 格式。"
+      }
+    }
+  },
+  "ComfyLightIndexTTS2InferEmotionAudio": {
+    "display_name": "IndexTTS2 语音合成（情感音频）",
+    "description": "使用独立情感参考音频控制情感表达，生成语音；未连接说话人参考音频时，情感参考音频也会用于音色参考。",
+    "inputs": {
+      "indextts2_model": {
+        "name": "IndexTTS2 模型",
+        "tooltip": "模型加载节点输出的模型句柄。"
+      },
+      "speaker_audio": {
+        "name": "说话人参考音频（可选）",
+        "tooltip": "可选；连接后用于控制音色，未连接时使用情感参考音频兼作音色参考。"
+      },
+      "emotion_audio": {
+        "name": "情感参考音频",
+        "tooltip": "用于控制情感表达的 ComfyUI AUDIO。"
+      },
+      "emo_alpha": {
+        "name": "情感音频权重",
+        "tooltip": "对情感参考音频进行混合。"
+      },
       "emotion_batch_index": {
         "name": "情感音频批次",
         "tooltip": "当情感 AUDIO 含多个 batch 时选择参考音频批次。"
+      },
+      "text": {
+        "name": "合成文本",
+        "tooltip": "需要合成的文本。文本文件为空时使用这里的内容。"
+      },
+      "text_file_path": {
+        "name": "文本文件",
+        "tooltip": "可选 UTF-8 文本文件路径；非空时覆盖合成文本。"
+      },
+      "target_duration_seconds": {
+        "name": "目标时长",
+        "tooltip": "大于 0 时启用 target_dur/use_speed 控制，单位为秒。"
+      },
+      "max_text_tokens_per_sentence": {
+        "name": "单句最大文本 Token",
+        "tooltip": "长文本按此上限切分。"
+      },
+      "length_scale": {
+        "name": "长度比例",
+        "tooltip": "语义 token 长度到声学目标长度的比例。"
+      },
+      "do_sample": {
+        "name": "启用采样",
+        "tooltip": "开启 GPT 采样；关闭时更偏确定性。"
+      },
+      "top_p": {
+        "name": "Top P",
+        "tooltip": "核采样 top_p，范围 (0, 1]。"
+      },
+      "top_k": {
+        "name": "Top K",
+        "tooltip": "Top-k 采样；0 表示不限制。"
+      },
+      "temperature": {
+        "name": "温度",
+        "tooltip": "GPT 采样温度。"
+      },
+      "num_beams": {
+        "name": "束搜索数量",
+        "tooltip": "Beam search 的候选束数量。"
+      },
+      "length_penalty": {
+        "name": "长度惩罚",
+        "tooltip": "生成长度惩罚。"
+      },
+      "repetition_penalty": {
+        "name": "重复惩罚",
+        "tooltip": "生成重复惩罚。"
+      },
+      "max_mel_tokens": {
+        "name": "最大 Mel Token",
+        "tooltip": "生成 mel token 的最大数量。"
+      },
+      "typical_sampling": {
+        "name": "Typical Sampling",
+        "tooltip": "启用 typical sampling。"
+      },
+      "typical_mass": {
+        "name": "Typical Mass",
+        "tooltip": "Typical sampling mass，范围 (0, 1)。"
+      },
+      "diffusion_steps": {
+        "name": "扩散步数",
+        "tooltip": "S2Mel CFM 扩散步数。"
+      },
+      "cfg_rate": {
+        "name": "CFG 强度",
+        "tooltip": "Classifier-free guidance 强度。"
+      },
+      "cfm_temperature": {
+        "name": "CFM 温度",
+        "tooltip": "CFM 初始噪声温度。"
+      },
+      "seed": {
+        "name": "随机种子",
+        "tooltip": "-1 表示不固定随机种子。"
+      },
+      "speaker_batch_index": {
+        "name": "说话人音频批次",
+        "tooltip": "当 AUDIO 含多个 batch 时选择参考音频批次。"
       },
       "output_path": {
         "name": "输出路径",
@@ -313,6 +387,294 @@
       "unload_model_after_generation": {
         "name": "生成后卸载模型",
         "tooltip": "生成结束后从插件缓存中卸载模型并清理显存缓存。"
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "音频",
+        "tooltip": "合成后的 ComfyUI AUDIO。"
+      },
+      "1": {
+        "name": "输出路径",
+        "tooltip": "保存的 wav 文件路径；未保存时为空。"
+      },
+      "2": {
+        "name": "信息",
+        "tooltip": "语音合成信息，JSON 格式。"
+      }
+    }
+  },
+  "ComfyLightIndexTTS2InferEmotionVector": {
+    "display_name": "IndexTTS2 语音合成（情感向量）",
+    "description": "使用八维情感向量控制情感表达，生成语音。",
+    "inputs": {
+      "indextts2_model": {
+        "name": "IndexTTS2 模型",
+        "tooltip": "模型加载节点输出的模型句柄。"
+      },
+      "speaker_audio": {
+        "name": "说话人参考音频",
+        "tooltip": "用于克隆音色的 ComfyUI AUDIO。"
+      },
+      "text": {
+        "name": "合成文本",
+        "tooltip": "需要合成的文本。文本文件为空时使用这里的内容。"
+      },
+      "text_file_path": {
+        "name": "文本文件",
+        "tooltip": "可选 UTF-8 文本文件路径；非空时覆盖合成文本。"
+      },
+      "target_duration_seconds": {
+        "name": "目标时长",
+        "tooltip": "大于 0 时启用 target_dur/use_speed 控制，单位为秒。"
+      },
+      "max_text_tokens_per_sentence": {
+        "name": "单句最大文本 Token",
+        "tooltip": "长文本按此上限切分。"
+      },
+      "length_scale": {
+        "name": "长度比例",
+        "tooltip": "语义 token 长度到声学目标长度的比例。"
+      },
+      "do_sample": {
+        "name": "启用采样",
+        "tooltip": "开启 GPT 采样；关闭时更偏确定性。"
+      },
+      "top_p": {
+        "name": "Top P",
+        "tooltip": "核采样 top_p，范围 (0, 1]。"
+      },
+      "top_k": {
+        "name": "Top K",
+        "tooltip": "Top-k 采样；0 表示不限制。"
+      },
+      "temperature": {
+        "name": "温度",
+        "tooltip": "GPT 采样温度。"
+      },
+      "num_beams": {
+        "name": "束搜索数量",
+        "tooltip": "Beam search 的候选束数量。"
+      },
+      "length_penalty": {
+        "name": "长度惩罚",
+        "tooltip": "生成长度惩罚。"
+      },
+      "repetition_penalty": {
+        "name": "重复惩罚",
+        "tooltip": "生成重复惩罚。"
+      },
+      "max_mel_tokens": {
+        "name": "最大 Mel Token",
+        "tooltip": "生成 mel token 的最大数量。"
+      },
+      "typical_sampling": {
+        "name": "Typical Sampling",
+        "tooltip": "启用 typical sampling。"
+      },
+      "typical_mass": {
+        "name": "Typical Mass",
+        "tooltip": "Typical sampling mass，范围 (0, 1)。"
+      },
+      "diffusion_steps": {
+        "name": "扩散步数",
+        "tooltip": "S2Mel CFM 扩散步数。"
+      },
+      "cfg_rate": {
+        "name": "CFG 强度",
+        "tooltip": "Classifier-free guidance 强度。"
+      },
+      "cfm_temperature": {
+        "name": "CFM 温度",
+        "tooltip": "CFM 初始噪声温度。"
+      },
+      "seed": {
+        "name": "随机种子",
+        "tooltip": "-1 表示不固定随机种子。"
+      },
+      "speaker_batch_index": {
+        "name": "说话人音频批次",
+        "tooltip": "当 AUDIO 含多个 batch 时选择参考音频批次。"
+      },
+      "output_path": {
+        "name": "输出路径",
+        "tooltip": "可选 wav 输出路径。相对路径写入 ComfyUI 输出目录；为空则只返回 AUDIO。"
+      },
+      "overwrite": {
+        "name": "覆盖输出",
+        "tooltip": "输出路径存在时是否覆盖。"
+      },
+      "verbose": {
+        "name": "详细日志",
+        "tooltip": "打印详细推理诊断。"
+      },
+      "unload_model_after_generation": {
+        "name": "生成后卸载模型",
+        "tooltip": "生成结束后从插件缓存中卸载模型并清理显存缓存。"
+      },
+      "emo_happy": {
+        "name": "喜悦权重",
+        "tooltip": "emotion_vector 模式下 happy 情感的权重。"
+      },
+      "emo_angry": {
+        "name": "愤怒权重",
+        "tooltip": "emotion_vector 模式下 angry 情感的权重。"
+      },
+      "emo_sad": {
+        "name": "悲伤权重",
+        "tooltip": "emotion_vector 模式下 sad 情感的权重。"
+      },
+      "emo_fear": {
+        "name": "恐惧权重",
+        "tooltip": "emotion_vector 模式下 fear 情感的权重。"
+      },
+      "emo_hate": {
+        "name": "厌恶权重",
+        "tooltip": "emotion_vector 模式下 hate 情感的权重。"
+      },
+      "emo_low": {
+        "name": "低落权重",
+        "tooltip": "emotion_vector 模式下 low 情感的权重。"
+      },
+      "emo_surprise": {
+        "name": "惊喜权重",
+        "tooltip": "emotion_vector 模式下 surprise 情感的权重。"
+      },
+      "emo_neutral": {
+        "name": "自然权重",
+        "tooltip": "emotion_vector 模式下 neutral 情感的权重。"
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "音频",
+        "tooltip": "合成后的 ComfyUI AUDIO。"
+      },
+      "1": {
+        "name": "输出路径",
+        "tooltip": "保存的 wav 文件路径；未保存时为空。"
+      },
+      "2": {
+        "name": "信息",
+        "tooltip": "语音合成信息，JSON 格式。"
+      }
+    }
+  },
+  "ComfyLightIndexTTS2InferEmotionText": {
+    "display_name": "IndexTTS2 语音合成（情感文本）",
+    "description": "使用文本情感分析控制情感表达，生成语音。",
+    "inputs": {
+      "indextts2_model": {
+        "name": "IndexTTS2 模型",
+        "tooltip": "模型加载节点输出的模型句柄。"
+      },
+      "speaker_audio": {
+        "name": "说话人参考音频",
+        "tooltip": "用于克隆音色的 ComfyUI AUDIO。"
+      },
+      "text": {
+        "name": "合成文本",
+        "tooltip": "需要合成的文本。文本文件为空时使用这里的内容。"
+      },
+      "text_file_path": {
+        "name": "文本文件",
+        "tooltip": "可选 UTF-8 文本文件路径；非空时覆盖合成文本。"
+      },
+      "target_duration_seconds": {
+        "name": "目标时长",
+        "tooltip": "大于 0 时启用 target_dur/use_speed 控制，单位为秒。"
+      },
+      "max_text_tokens_per_sentence": {
+        "name": "单句最大文本 Token",
+        "tooltip": "长文本按此上限切分。"
+      },
+      "length_scale": {
+        "name": "长度比例",
+        "tooltip": "语义 token 长度到声学目标长度的比例。"
+      },
+      "do_sample": {
+        "name": "启用采样",
+        "tooltip": "开启 GPT 采样；关闭时更偏确定性。"
+      },
+      "top_p": {
+        "name": "Top P",
+        "tooltip": "核采样 top_p，范围 (0, 1]。"
+      },
+      "top_k": {
+        "name": "Top K",
+        "tooltip": "Top-k 采样；0 表示不限制。"
+      },
+      "temperature": {
+        "name": "温度",
+        "tooltip": "GPT 采样温度。"
+      },
+      "num_beams": {
+        "name": "束搜索数量",
+        "tooltip": "Beam search 的候选束数量。"
+      },
+      "length_penalty": {
+        "name": "长度惩罚",
+        "tooltip": "生成长度惩罚。"
+      },
+      "repetition_penalty": {
+        "name": "重复惩罚",
+        "tooltip": "生成重复惩罚。"
+      },
+      "max_mel_tokens": {
+        "name": "最大 Mel Token",
+        "tooltip": "生成 mel token 的最大数量。"
+      },
+      "typical_sampling": {
+        "name": "Typical Sampling",
+        "tooltip": "启用 typical sampling。"
+      },
+      "typical_mass": {
+        "name": "Typical Mass",
+        "tooltip": "Typical sampling mass，范围 (0, 1)。"
+      },
+      "diffusion_steps": {
+        "name": "扩散步数",
+        "tooltip": "S2Mel CFM 扩散步数。"
+      },
+      "cfg_rate": {
+        "name": "CFG 强度",
+        "tooltip": "Classifier-free guidance 强度。"
+      },
+      "cfm_temperature": {
+        "name": "CFM 温度",
+        "tooltip": "CFM 初始噪声温度。"
+      },
+      "seed": {
+        "name": "随机种子",
+        "tooltip": "-1 表示不固定随机种子。"
+      },
+      "speaker_batch_index": {
+        "name": "说话人音频批次",
+        "tooltip": "当 AUDIO 含多个 batch 时选择参考音频批次。"
+      },
+      "output_path": {
+        "name": "输出路径",
+        "tooltip": "可选 wav 输出路径。相对路径写入 ComfyUI 输出目录；为空则只返回 AUDIO。"
+      },
+      "overwrite": {
+        "name": "覆盖输出",
+        "tooltip": "输出路径存在时是否覆盖。"
+      },
+      "verbose": {
+        "name": "详细日志",
+        "tooltip": "打印详细推理诊断。"
+      },
+      "unload_model_after_generation": {
+        "name": "生成后卸载模型",
+        "tooltip": "生成结束后从插件缓存中卸载模型并清理显存缓存。"
+      },
+      "emo_text": {
+        "name": "情感文本",
+        "tooltip": "用于情感分析的文本；为空时使用合成文本。"
+      },
+      "emo_text_weight": {
+        "name": "文本情感权重",
+        "tooltip": "对 Qwen 情感评分结果进行缩放。"
       }
     },
     "outputs": {

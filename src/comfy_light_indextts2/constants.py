@@ -4,7 +4,6 @@ CATEGORY = "eastmoe/Comfy-Light-IndexTTS2"
 MODEL_TYPE = "COMFY_LIGHT_INDEXTTS2_MODEL"
 
 EMOTION_NAMES = ("happy", "angry", "sad", "fear", "hate", "low", "surprise", "neutral")
-EMOTION_MODES = ("speaker_audio", "emotion_audio", "emotion_vector", "emotion_text")
 DEVICE_OPTIONS = ("auto", "cuda:0", "cuda:1", "xpu:0", "xpu:1", "cpu", "mps")
 PRECISION_OPTIONS = ("FP16", "BF16", "FP32", "FP8")
 CUDA_KERNEL_OPTIONS = ("auto", "enabled", "disabled")
