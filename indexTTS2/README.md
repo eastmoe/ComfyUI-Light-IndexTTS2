@@ -22,7 +22,7 @@ Download the model files separately and place them in `checkpoints/`, or pass `-
 ## CLI
 
 ```bash
-indextts "欢迎大家来体验 IndexTTS2。" \
+python infer.py "欢迎大家来体验 IndexTTS2。" \
   --voice reference.wav \
   --output-path gen.wav \
   --model-dir checkpoints \
@@ -33,9 +33,10 @@ indextts "欢迎大家来体验 IndexTTS2。" \
 Emotion reference audio:
 
 ```bash
-indextts "今天的心情不错。" \
+python infer.py "今天的心情不错。" \
   --voice speaker.wav \
   --emo-audio emotion.wav \
+  --emo-alpha 1.0 \
   --output-path gen.wav \
   --force
 ```
@@ -43,7 +44,7 @@ indextts "今天的心情不错。" \
 Text-guided emotion:
 
 ```bash
-indextts "这一句带一点开心。" \
+python infer.py "这一句带一点开心。" \
   --voice speaker.wav \
   --emo-text "开心、轻松" \
   --output-path gen.wav \
@@ -53,12 +54,35 @@ indextts "这一句带一点开心。" \
 Target duration:
 
 ```bash
-indextts "请合成到指定时长。" \
+python infer.py "请合成到指定时长。" \
   --voice speaker.wav \
   --target-dur 7.5 \
   --output-path gen.wav \
   --force
 ```
+
+Custom generation:
+
+```bash
+python infer.py --text-file input.txt \
+  --voice speaker.wav \
+  --output-path gen.wav \
+  --top-p 0.8 \
+  --top-k 30 \
+  --temperature 0.8 \
+  --num-beams 3 \
+  --max-mel-tokens 1500 \
+  --diffusion-steps 25 \
+  --cfg-rate 0.7 \
+  --cfm-temperature 1.0 \
+  --seed 1234 \
+  --force
+```
+
+Run `python infer.py --help` to see all options, including `--emo-vector`,
+`--use-emo-text`, `--length-scale`, `--do-sample/--no-do-sample`,
+`--typical-sampling`, `--device`, `--fp16/--no-fp16`, and
+`--cuda-kernel/--no-cuda-kernel`.
 
 ## Python API
 

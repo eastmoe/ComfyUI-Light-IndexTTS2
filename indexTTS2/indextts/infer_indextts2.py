@@ -456,6 +456,10 @@ class IndexTTS2:
         num_beams = generation_kwargs.pop("num_beams", 3)
         repetition_penalty = generation_kwargs.pop("repetition_penalty", 10.0)
         max_mel_tokens = generation_kwargs.pop("max_mel_tokens", 1500)
+        diffusion_steps = generation_kwargs.pop("diffusion_steps", 25)
+        inference_cfg_rate = generation_kwargs.pop("inference_cfg_rate", 0.7)
+        cfm_temperature = generation_kwargs.pop("cfm_temperature", 1.0)
+        length_scale = generation_kwargs.pop("length_scale", 1.72)
         sampling_rate = 22050
 
         wavs = []
@@ -499,7 +503,7 @@ class IndexTTS2:
                                     emo_vec=emovec,
                                     use_speed=use_speed,
                                     num_codes=num_codes,
-                                    do_sample=True,
+                                    do_sample=do_sample,
                                     top_p=top_p,
                                     top_k=top_k,
                                     temperature=temperature,
@@ -530,7 +534,6 @@ class IndexTTS2:
                 code_lens = []
                 for code in codes:
                     if self.stop_mel_token not in code:
-                        code_lens.append(len(code))
                         code_len = len(code)
                     else:
                         len_ = (code == self.stop_mel_token).nonzero(as_tuple=False)[0]+1
@@ -565,13 +568,11 @@ class IndexTTS2:
                     gpt_forward_time += time.perf_counter() - m_start_time
 
                     m_start_time = time.perf_counter()
-                    diffusion_steps=25
-                    inference_cfg_rate=0.7
                     latent = self.s2mel.models['gpt_layer'](latent)
                     S_infer = self.semantic_codec.quantizer.vq2emb(codes.unsqueeze(1))
                     S_infer = S_infer.transpose(1,2)
                     S_infer = S_infer + latent
-                    target_lengths = (code_lens * 1.72).long()
+                    target_lengths = (code_lens * length_scale).long()
 
                     cond = self.s2mel.models['length_regulator'](S_infer,
                                                         ylens=target_lengths,
@@ -581,6 +582,7 @@ class IndexTTS2:
                     vc_target = self.s2mel.models['cfm'].inference(cat_condition,
                                                            torch.LongTensor([cat_condition.size(1)]).to(cond.device),
                                                            ref_mel, style, None, diffusion_steps,
+                                                           temperature=cfm_temperature,
                                                            inference_cfg_rate=inference_cfg_rate)
                     vc_target = vc_target[:, :, ref_mel.size(-1):]
                     s2mel_time += time.perf_counter() - m_start_time
