@@ -27,7 +27,7 @@ setup(
         "librosa>=0.10.2.post1,<0.12",
         "numpy>=1.23,<3",
         "scipy",
-        "einops==0.8.1",
+        "einops",
         "tqdm",
         "PyYAML",
         "wetext" if platform.system() == "Darwin" else "WeTextProcessing",
