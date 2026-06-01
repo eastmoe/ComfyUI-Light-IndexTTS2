@@ -94,7 +94,12 @@ def cleanup_torch_memory() -> None:
         torch.cuda.empty_cache()
     if hasattr(torch, "xpu") and torch.xpu.is_available() and hasattr(torch.xpu, "empty_cache"):
         torch.xpu.empty_cache()
-    if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+    if (
+        hasattr(torch, "mps")
+        and hasattr(torch.mps, "empty_cache")
+        and hasattr(torch.backends, "mps")
+        and torch.backends.mps.is_available()
+    ):
         torch.mps.empty_cache()
     gc.collect()
 
