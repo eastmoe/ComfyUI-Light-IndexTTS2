@@ -25,6 +25,19 @@ ComfyUI/models/IndexTTS2/
 
 With `model_dir=auto`, the local loader reads `ComfyUI/models/IndexTTS2/IndexTTS-2/config.yaml`. For compatibility, it falls back to the old flat layout `ComfyUI/models/IndexTTS2/config.yaml` when the new subdirectory does not exist.
 
+## Stalled Downloads
+
+The online loader disables Hugging Face Xet downloads by default and uses one `snapshot_download` worker to avoid large-file transfers stalling midway. These defaults can be overridden before starting ComfyUI:
+
+```bash
+export HF_HUB_DISABLE_XET=1
+export HF_HUB_DOWNLOAD_TIMEOUT=60
+export HF_HUB_ETAG_TIMEOUT=30
+export INDEXTTS2_HF_DOWNLOAD_WORKERS=1
+```
+
+If direct Hugging Face downloads are still unstable, set the node `download_source` to `hf-mirror` and rerun. Existing `.incomplete` files are resumable in normal cases.
+
 ## Nodes
 
 - `加载 IndexTTS2 模型`: validates local IndexTTS2 files, then creates and caches a model handle with selectable device, compute precision, and optional FP8/FP4 Linear quantization.

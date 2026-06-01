@@ -132,6 +132,10 @@ def resolve_hf_endpoint(source: str, custom_endpoint: str = "") -> str:
 
 def configure_hf_network(endpoint: str, disable_ssl_verification: bool) -> None:
     os.environ["HF_ENDPOINT"] = endpoint
+    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "60")
+    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "30")
+    _patch_hf_runtime_constants()
     if disable_ssl_verification:
         os.environ["HF_HUB_DISABLE_SSL_VERIFICATION"] = "1"
         os.environ["CURL_CA_BUNDLE"] = ""
@@ -161,10 +165,17 @@ def configure_hf_network(endpoint: str, disable_ssl_verification: bool) -> None:
 
         def client_factory():
             hooks = {"request": [hf_request_event_hook]} if hf_request_event_hook else None
+            timeout = httpx.Timeout(
+                _env_float("HF_HUB_DOWNLOAD_TIMEOUT", 60),
+                connect=_env_float("HF_HUB_ETAG_TIMEOUT", 30),
+                read=_env_float("HF_HUB_DOWNLOAD_TIMEOUT", 60),
+                write=_env_float("HF_HUB_DOWNLOAD_TIMEOUT", 60),
+                pool=_env_float("HF_HUB_ETAG_TIMEOUT", 30),
+            )
             return httpx.Client(
                 event_hooks=hooks,
                 follow_redirects=True,
-                timeout=None,
+                timeout=timeout,
                 verify=not disable_ssl_verification,
             )
 
@@ -174,10 +185,17 @@ def configure_hf_network(endpoint: str, disable_ssl_verification: bool) -> None:
                 hooks["request"] = [async_hf_request_event_hook]
             if async_hf_response_event_hook:
                 hooks["response"] = [async_hf_response_event_hook]
+            timeout = httpx.Timeout(
+                _env_float("HF_HUB_DOWNLOAD_TIMEOUT", 60),
+                connect=_env_float("HF_HUB_ETAG_TIMEOUT", 30),
+                read=_env_float("HF_HUB_DOWNLOAD_TIMEOUT", 60),
+                write=_env_float("HF_HUB_DOWNLOAD_TIMEOUT", 60),
+                pool=_env_float("HF_HUB_ETAG_TIMEOUT", 30),
+            )
             return httpx.AsyncClient(
                 event_hooks=hooks or None,
                 follow_redirects=True,
-                timeout=None,
+                timeout=timeout,
                 verify=not disable_ssl_verification,
             )
 
@@ -201,6 +219,44 @@ def configure_hf_network(endpoint: str, disable_ssl_verification: bool) -> None:
         configure_http_backend(backend_factory=backend_factory)
     except TypeError:
         configure_http_backend(backend_factory)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _patch_hf_runtime_constants() -> None:
+    try:
+        from huggingface_hub import constants
+    except Exception:
+        return
+
+    constants.HF_HUB_DISABLE_XET = _env_bool("HF_HUB_DISABLE_XET", True)
+    constants.HF_HUB_DOWNLOAD_TIMEOUT = _env_float("HF_HUB_DOWNLOAD_TIMEOUT", 60)
+    constants.HF_HUB_ETAG_TIMEOUT = _env_float("HF_HUB_ETAG_TIMEOUT", 30)
+
+
+def _hf_download_workers() -> int:
+    try:
+        value = int(os.environ.get("INDEXTTS2_HF_DOWNLOAD_WORKERS", "1"))
+    except ValueError:
+        value = 1
+    return max(1, min(value, 8))
+
+
+def _call_hf_download(fn, **kwargs):
+    signature = inspect.signature(fn).parameters
+    return fn(**{key: value for key, value in kwargs.items() if key in signature and value is not None})
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -356,10 +412,13 @@ def download_model_snapshot(
         "force_download": bool(force_download),
         "allow_patterns": _csv_patterns(allow_patterns),
         "ignore_patterns": _csv_patterns(ignore_patterns),
+        "max_workers": _hf_download_workers(),
+        "etag_timeout": _env_float("HF_HUB_ETAG_TIMEOUT", 30),
+        "endpoint": endpoint,
     }
     if "local_dir_use_symlinks" in inspect.signature(snapshot_download).parameters:
         kwargs["local_dir_use_symlinks"] = False
-    snapshot_download(**{key: value for key, value in kwargs.items() if value is not None})
+    _call_hf_download(snapshot_download, **kwargs)
     return resolved_dir, endpoint
 
 
@@ -389,6 +448,9 @@ def download_runtime_dependencies(
         "cache_dir": str(cache_dir),
         "local_dir": str(dependency_root / _repo_dir_name("facebook/w2v-bert-2.0")),
         "force_download": bool(force_download),
+        "max_workers": _hf_download_workers(),
+        "etag_timeout": _env_float("HF_HUB_ETAG_TIMEOUT", 30),
+        "endpoint": endpoint,
         "allow_patterns": [
             "config.json",
             "preprocessor_config.json",
@@ -400,23 +462,27 @@ def download_runtime_dependencies(
     }
     if "local_dir_use_symlinks" in inspect.signature(snapshot_download).parameters:
         snapshot_kwargs["local_dir_use_symlinks"] = False
-    snapshot_download(**snapshot_kwargs)
+    _call_hf_download(snapshot_download, **snapshot_kwargs)
     downloaded.append(str(dependency_root / _repo_dir_name("facebook/w2v-bert-2.0")))
 
     hub_kwargs: dict[str, Any] = {
         "cache_dir": str(cache_dir),
         "force_download": bool(force_download),
+        "etag_timeout": _env_float("HF_HUB_ETAG_TIMEOUT", 30),
+        "endpoint": endpoint,
     }
-    hf_hub_download(
-        "amphion/MaskGCT",
+    _call_hf_download(
+        hf_hub_download,
+        repo_id="amphion/MaskGCT",
         filename="semantic_codec/model.safetensors",
         local_dir=str(dependency_root / _repo_dir_name("amphion/MaskGCT")),
         **hub_kwargs,
     )
     downloaded.append(str(dependency_root / _repo_dir_name("amphion/MaskGCT")))
 
-    hf_hub_download(
-        "funasr/campplus",
+    _call_hf_download(
+        hf_hub_download,
+        repo_id="funasr/campplus",
         filename="campplus_cn_common.bin",
         local_dir=str(dependency_root / _repo_dir_name("funasr/campplus")),
         **hub_kwargs,
@@ -426,9 +492,16 @@ def download_runtime_dependencies(
     bigvgan_name = _config_value(config, "vocoder.name")
     if isinstance(bigvgan_name, str) and bigvgan_name.strip() and not Path(bigvgan_name).expanduser().is_dir():
         bigvgan_dir = dependency_root / _repo_dir_name(bigvgan_name.strip())
-        hf_hub_download(bigvgan_name.strip(), filename="config.json", local_dir=str(bigvgan_dir), **hub_kwargs)
-        hf_hub_download(
-            bigvgan_name.strip(),
+        _call_hf_download(
+            hf_hub_download,
+            repo_id=bigvgan_name.strip(),
+            filename="config.json",
+            local_dir=str(bigvgan_dir),
+            **hub_kwargs,
+        )
+        _call_hf_download(
+            hf_hub_download,
+            repo_id=bigvgan_name.strip(),
             filename="bigvgan_generator.pt",
             local_dir=str(bigvgan_dir),
             **hub_kwargs,

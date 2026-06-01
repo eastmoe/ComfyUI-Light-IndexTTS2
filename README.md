@@ -67,6 +67,19 @@ ComfyUI/models/IndexTTS2/config.yaml
 
 当 `model_dir` 为 `auto` 且不存在 `IndexTTS-2/config.yaml` 时，加载器会自动回退到这个旧目录。
 
+## 下载卡住
+
+在线加载节点默认会禁用 Hugging Face Xet 下载通道，并把 `snapshot_download` 限制为单线程，以降低大文件下载到一半无吞吐的概率。可通过环境变量调整：
+
+```bash
+export HF_HUB_DISABLE_XET=1
+export HF_HUB_DOWNLOAD_TIMEOUT=60
+export HF_HUB_ETAG_TIMEOUT=30
+export INDEXTTS2_HF_DOWNLOAD_WORKERS=1
+```
+
+如果 Hugging Face 直连仍然不稳定，优先把节点里的 `download_source` 改为 `hf-mirror` 后重新运行。已有的 `.incomplete` 下载会继续复用，通常不需要删除。
+
 ## 项目结构
 
 ```text
