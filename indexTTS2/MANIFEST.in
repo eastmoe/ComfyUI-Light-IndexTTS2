@@ -1,0 +1,2 @@
+global-exclude *~ *.py[cod]
+recursive-include indextts *.json *.wav *.cu *.cpp *.h *.hpp

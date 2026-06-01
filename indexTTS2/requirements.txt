@@ -1,0 +1,18 @@
+torch>=2.1.2
+torchaudio
+transformers==4.52.1
+tokenizers==0.21.0
+huggingface_hub
+safetensors==0.5.2
+modelscope
+omegaconf
+sentencepiece
+librosa==0.10.2.post1
+numpy==1.26.2
+scipy
+einops==0.8.1
+tqdm
+PyYAML
+
+WeTextProcessing; platform_machine != "Darwin"
+wetext; platform_system == "Darwin"
