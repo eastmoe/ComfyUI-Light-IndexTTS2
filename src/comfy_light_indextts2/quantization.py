@@ -379,15 +379,9 @@ def _quantized_state_dict(module: torch.nn.Module, names: list[str]) -> dict[str
 
 
 def _named_components(model: Any) -> dict[str, torch.nn.Module]:
-    names = (
-        "qwen_emo.model",
-        "gpt",
-        "semantic_model",
-        "semantic_codec",
-        "s2mel",
-        "campplus_model",
-        "bigvgan",
-    )
+    # Experimental quantization is intentionally limited to the IndexTTS2 main GPT
+    # path. Quantizing vocoder / semantic / emotion models has caused noisy output.
+    names = ("gpt",)
     components: dict[str, torch.nn.Module] = {}
     for name in names:
         value: Any = model
@@ -408,8 +402,8 @@ def _cache_path(
     chunk_size: int | None,
 ) -> tuple[Path, dict[str, Any]]:
     metadata = {
-        "cache_version": 1,
-        "format": "indextts2-weight-only-linear",
+        "cache_version": 2,
+        "format": "indextts2-gpt-weight-only-linear",
         "mode": mode,
         "chunk_size": chunk_size,
         "signature": _model_signature(model_dir, config_path),

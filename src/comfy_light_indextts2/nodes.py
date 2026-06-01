@@ -18,6 +18,7 @@ from .constants import (
 from .paths import default_model_dir, default_model_root, resolve_output_path
 from .runtime import (
     IndexTTS2ModelHandle,
+    clear_model_runtime_state,
     cleanup_torch_memory,
     download_model_snapshot,
     download_runtime_dependencies,
@@ -251,6 +252,7 @@ class ComfyLightIndexTTS2OnlineLoadModel:
             force_download=bool(force_download),
             allow_patterns=allow_patterns,
             ignore_patterns=ignore_patterns,
+            config_path=config_path,
         )
         resolved_config = model_dir / "config.yaml" if (config_path or "auto").strip().lower() == "auto" else Path(config_path).expanduser()
         if not resolved_config.is_absolute():
@@ -485,6 +487,39 @@ class _ComfyLightIndexTTS2InferBase:
             raise FileExistsError(f"Output file exists and overwrite is disabled: {resolved_output}")
 
         use_speed = float(target_duration_seconds) > 0.0
+        inference_signature = (
+            synth_text,
+            str(speaker_path),
+            str(emo_audio_prompt) if emo_audio_prompt is not None else "",
+            emotion_mode,
+            float(emo_alpha),
+            tuple(float(value) for value in emo_vector) if emo_vector is not None else None,
+            bool(use_emo_text),
+            effective_emo_text,
+            float(emo_text_weight),
+            use_speed,
+            float(target_duration_seconds) if use_speed else None,
+            int(max_text_tokens_per_sentence),
+            float(length_scale),
+            bool(do_sample),
+            float(top_p),
+            int(top_k),
+            float(temperature),
+            int(num_beams),
+            float(length_penalty),
+            float(repetition_penalty),
+            int(max_mel_tokens),
+            bool(typical_sampling),
+            float(typical_mass),
+            int(diffusion_steps),
+            float(cfg_rate),
+            float(cfm_temperature),
+            int(seed),
+        )
+        if indextts2_model.inference_signature != inference_signature:
+            clear_model_runtime_state(indextts2_model.model)
+            indextts2_model.inference_signature = inference_signature
+
         try:
             result = indextts2_model.model.infer(
                 spk_audio_prompt=str(speaker_path),

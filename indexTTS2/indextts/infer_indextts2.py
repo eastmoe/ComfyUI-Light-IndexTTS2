@@ -1,5 +1,6 @@
 import os
 os.environ.setdefault('HF_HUB_CACHE', './checkpoints/hf_cache')
+import re
 import time
 
 import numpy as np
@@ -28,6 +29,31 @@ from indextts.s2mel.modules.campplus.DTDNN import CAMPPlus
 from indextts.s2mel.modules.audio import mel_spectrogram
 
 from indextts.utils.front import TextNormalizer, TextTokenizer
+
+
+def _repo_dir_name(repo_id: str) -> str:
+    leaf = (repo_id or "").strip().rstrip("/").rsplit("/", 1)[-1]
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", leaf).strip(".-") or leaf
+
+
+def _dependency_root(model_dir: str) -> str:
+    resolved = os.path.abspath(model_dir)
+    if os.path.basename(resolved) == "IndexTTS-2":
+        return os.path.dirname(resolved)
+    return resolved
+
+
+def _local_repo_dir(model_dir: str, repo_id: str, required_files=()):
+    path = os.path.join(_dependency_root(model_dir), _repo_dir_name(repo_id))
+    if os.path.isdir(path) and all(os.path.isfile(os.path.join(path, name)) for name in required_files):
+        return path
+    return repo_id
+
+
+def _local_repo_file(model_dir: str, repo_id: str, filename: str):
+    repo_dir = os.path.join(_dependency_root(model_dir), _repo_dir_name(repo_id))
+    path = os.path.join(repo_dir, filename)
+    return path if os.path.isfile(path) else None
 
 
 def _save_wav_compat(output_path, wav, sampling_rate):
@@ -246,15 +272,25 @@ class IndexTTS2:
                 self.use_cuda_kernel = False
 
 
-        self.extract_features = SeamlessM4TFeatureExtractor.from_pretrained("facebook/w2v-bert-2.0")
-        self.semantic_model, self.semantic_mean, self.semantic_std = build_semantic_model(os.path.join(self.model_dir, self.cfg.w2v_stat))
+        w2v_model_dir = _local_repo_dir(
+            self.model_dir,
+            "facebook/w2v-bert-2.0",
+            required_files=("config.json", "preprocessor_config.json"),
+        )
+        self.extract_features = SeamlessM4TFeatureExtractor.from_pretrained(w2v_model_dir)
+        self.semantic_model, self.semantic_mean, self.semantic_std = build_semantic_model(
+            os.path.join(self.model_dir, self.cfg.w2v_stat),
+            w2v_model_dir,
+        )
         self.semantic_model = self.semantic_model.to(self.device)
         self.semantic_model.eval()
         self.semantic_mean = self.semantic_mean.to(self.device)
         self.semantic_std = self.semantic_std.to(self.device)
 
         semantic_codec = build_semantic_codec(self.cfg.semantic_codec)
-        semantic_code_ckpt = hf_hub_download("amphion/MaskGCT", filename="semantic_codec/model.safetensors")
+        semantic_code_ckpt = _local_repo_file(self.model_dir, "amphion/MaskGCT", "semantic_codec/model.safetensors")
+        if semantic_code_ckpt is None:
+            semantic_code_ckpt = hf_hub_download("amphion/MaskGCT", filename="semantic_codec/model.safetensors")
         safetensors.torch.load_model(semantic_codec, semantic_code_ckpt)
         self.semantic_codec = semantic_codec.to(self.device)
         self.semantic_codec.eval()
@@ -276,9 +312,11 @@ class IndexTTS2:
         print(">> s2mel weights restored from:", s2mel_path)
 
         # load campplus_model
-        campplus_ckpt_path = hf_hub_download(
-            "funasr/campplus", filename="campplus_cn_common.bin"
-        )
+        campplus_ckpt_path = _local_repo_file(self.model_dir, "funasr/campplus", "campplus_cn_common.bin")
+        if campplus_ckpt_path is None:
+            campplus_ckpt_path = hf_hub_download(
+                "funasr/campplus", filename="campplus_cn_common.bin"
+            )
         campplus_model = CAMPPlus(feat_dim=80, embedding_size=192)
         campplus_model.load_state_dict(torch_load(campplus_ckpt_path, map_location="cpu"))
         self.campplus_model = campplus_model.to(self.device)
@@ -286,6 +324,13 @@ class IndexTTS2:
         print(">> campplus_model weights restored from:", campplus_ckpt_path)
 
         bigvgan_name = self.cfg.vocoder.name
+        if isinstance(bigvgan_name, str) and not os.path.isdir(bigvgan_name):
+            local_bigvgan = _local_repo_dir(
+                self.model_dir,
+                bigvgan_name,
+                required_files=("config.json", "bigvgan_generator.pt"),
+            )
+            bigvgan_name = local_bigvgan
         self.bigvgan = bigvgan.BigVGAN.from_pretrained(bigvgan_name, use_cuda_kernel=self.use_cuda_kernel)
         self.bigvgan = self.bigvgan.to(self.device)
         self.bigvgan.remove_weight_norm()

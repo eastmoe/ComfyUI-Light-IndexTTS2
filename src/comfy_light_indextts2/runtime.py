@@ -97,7 +97,10 @@ def cleanup_torch_memory() -> None:
     import torch
 
     if torch.cuda.is_available():
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
+        if hasattr(torch.cuda, "ipc_collect"):
+            torch.cuda.ipc_collect()
     if hasattr(torch, "xpu") and torch.xpu.is_available() and hasattr(torch.xpu, "empty_cache"):
         torch.xpu.empty_cache()
     if (
@@ -332,6 +335,52 @@ def _model_root_for_dependencies(model_dir: Path) -> Path:
     return model_dir
 
 
+def _local_repo_dir(root: Path, repo_id: str) -> Path:
+    return root / _repo_dir_name(repo_id)
+
+
+def _has_any_file(directory: Path, filenames: tuple[str, ...]) -> bool:
+    return any((directory / filename).is_file() for filename in filenames)
+
+
+def _dependency_status(model_dir: Path, config_path: Path) -> tuple[list[str], list[str]]:
+    dependency_root = _model_root_for_dependencies(model_dir)
+    config = _load_yaml(config_path)
+    present: list[str] = []
+    missing: list[str] = []
+
+    w2v_dir = _local_repo_dir(dependency_root, "facebook/w2v-bert-2.0")
+    if (w2v_dir / "config.json").is_file() and (w2v_dir / "preprocessor_config.json").is_file() and _has_any_file(
+        w2v_dir,
+        ("model.safetensors", "pytorch_model.bin", "model.safetensors.index.json"),
+    ):
+        present.append(str(w2v_dir))
+    else:
+        missing.append("facebook/w2v-bert-2.0")
+
+    maskgct_file = _local_repo_dir(dependency_root, "amphion/MaskGCT") / "semantic_codec" / "model.safetensors"
+    if maskgct_file.is_file():
+        present.append(str(maskgct_file.parent.parent))
+    else:
+        missing.append("amphion/MaskGCT")
+
+    campplus_file = _local_repo_dir(dependency_root, "funasr/campplus") / "campplus_cn_common.bin"
+    if campplus_file.is_file():
+        present.append(str(campplus_file.parent))
+    else:
+        missing.append("funasr/campplus")
+
+    bigvgan_name = _config_value(config, "vocoder.name")
+    if isinstance(bigvgan_name, str) and bigvgan_name.strip() and not Path(bigvgan_name).expanduser().is_dir():
+        bigvgan_dir = _local_repo_dir(dependency_root, bigvgan_name.strip())
+        if (bigvgan_dir / "config.json").is_file() and (bigvgan_dir / "bigvgan_generator.pt").is_file():
+            present.append(str(bigvgan_dir))
+        else:
+            missing.append(bigvgan_name.strip())
+
+    return present, missing
+
+
 def _hf_cache_dir(model_dir: Path) -> Path:
     return _model_root_for_dependencies(model_dir) / "hf_cache"
 
@@ -390,13 +439,27 @@ def download_model_snapshot(
     force_download: bool,
     allow_patterns: str = "",
     ignore_patterns: str = "",
+    config_path: str = "auto",
 ) -> tuple[Path, str]:
     if not (repo_id or "").strip():
         raise ValueError("repo_id is required.")
 
     resolved_dir = _resolve_download_target(local_dir, repo_id)
-    resolved_dir.mkdir(parents=True, exist_ok=True)
     endpoint = resolve_hf_endpoint(source, custom_endpoint)
+    if not force_download:
+        config_text = (config_path or "").strip()
+        resolved_config = resolved_dir / "config.yaml" if not config_text or config_text.lower() == "auto" else Path(config_text).expanduser()
+        if not resolved_config.is_absolute():
+            resolved_config = resolved_dir / resolved_config
+        if resolved_config.is_file():
+            try:
+                validate_model_files(resolved_dir, resolved_config.resolve())
+                print(f">> Local IndexTTS2 model found, skip Hugging Face snapshot download: {resolved_dir}", flush=True)
+                return resolved_dir.resolve(), endpoint
+            except FileNotFoundError:
+                pass
+
+    resolved_dir.mkdir(parents=True, exist_ok=True)
     cache_dir = _hf_cache_dir(resolved_dir)
     os.environ["HF_HUB_CACHE"] = str(cache_dir)
     configure_hf_network(endpoint, disable_ssl_verification)
@@ -431,6 +494,12 @@ def download_runtime_dependencies(
     disable_ssl_verification: bool,
     force_download: bool = False,
 ) -> list[str]:
+    if not force_download:
+        present, missing = _dependency_status(model_dir, config_path)
+        if not missing:
+            print(">> Local IndexTTS2 dependencies found, skip Hugging Face dependency downloads.", flush=True)
+            return present
+
     endpoint = resolve_hf_endpoint(source, custom_endpoint)
     dependency_root = _model_root_for_dependencies(model_dir)
     cache_dir = _hf_cache_dir(model_dir)
@@ -442,28 +511,30 @@ def download_runtime_dependencies(
     config = _load_yaml(config_path)
     downloaded: list[str] = []
 
-    snapshot_kwargs: dict[str, Any] = {
-        "repo_id": "facebook/w2v-bert-2.0",
-        "repo_type": "model",
-        "cache_dir": str(cache_dir),
-        "local_dir": str(dependency_root / _repo_dir_name("facebook/w2v-bert-2.0")),
-        "force_download": bool(force_download),
-        "max_workers": _hf_download_workers(),
-        "etag_timeout": _env_float("HF_HUB_ETAG_TIMEOUT", 30),
-        "endpoint": endpoint,
-        "allow_patterns": [
-            "config.json",
-            "preprocessor_config.json",
-            "model.safetensors",
-            "model.safetensors.index.json",
-            "*.safetensors",
-            "pytorch_model.bin",
-        ],
-    }
-    if "local_dir_use_symlinks" in inspect.signature(snapshot_download).parameters:
-        snapshot_kwargs["local_dir_use_symlinks"] = False
-    _call_hf_download(snapshot_download, **snapshot_kwargs)
-    downloaded.append(str(dependency_root / _repo_dir_name("facebook/w2v-bert-2.0")))
+    w2v_dir = _local_repo_dir(dependency_root, "facebook/w2v-bert-2.0")
+    if force_download or "facebook/w2v-bert-2.0" in _dependency_status(model_dir, config_path)[1]:
+        snapshot_kwargs: dict[str, Any] = {
+            "repo_id": "facebook/w2v-bert-2.0",
+            "repo_type": "model",
+            "cache_dir": str(cache_dir),
+            "local_dir": str(w2v_dir),
+            "force_download": bool(force_download),
+            "max_workers": _hf_download_workers(),
+            "etag_timeout": _env_float("HF_HUB_ETAG_TIMEOUT", 30),
+            "endpoint": endpoint,
+            "allow_patterns": [
+                "config.json",
+                "preprocessor_config.json",
+                "model.safetensors",
+                "model.safetensors.index.json",
+                "*.safetensors",
+                "pytorch_model.bin",
+            ],
+        }
+        if "local_dir_use_symlinks" in inspect.signature(snapshot_download).parameters:
+            snapshot_kwargs["local_dir_use_symlinks"] = False
+        _call_hf_download(snapshot_download, **snapshot_kwargs)
+    downloaded.append(str(w2v_dir))
 
     hub_kwargs: dict[str, Any] = {
         "cache_dir": str(cache_dir),
@@ -471,41 +542,46 @@ def download_runtime_dependencies(
         "etag_timeout": _env_float("HF_HUB_ETAG_TIMEOUT", 30),
         "endpoint": endpoint,
     }
-    _call_hf_download(
-        hf_hub_download,
-        repo_id="amphion/MaskGCT",
-        filename="semantic_codec/model.safetensors",
-        local_dir=str(dependency_root / _repo_dir_name("amphion/MaskGCT")),
-        **hub_kwargs,
-    )
-    downloaded.append(str(dependency_root / _repo_dir_name("amphion/MaskGCT")))
+    maskgct_dir = _local_repo_dir(dependency_root, "amphion/MaskGCT")
+    if force_download or not (maskgct_dir / "semantic_codec" / "model.safetensors").is_file():
+        _call_hf_download(
+            hf_hub_download,
+            repo_id="amphion/MaskGCT",
+            filename="semantic_codec/model.safetensors",
+            local_dir=str(maskgct_dir),
+            **hub_kwargs,
+        )
+    downloaded.append(str(maskgct_dir))
 
-    _call_hf_download(
-        hf_hub_download,
-        repo_id="funasr/campplus",
-        filename="campplus_cn_common.bin",
-        local_dir=str(dependency_root / _repo_dir_name("funasr/campplus")),
-        **hub_kwargs,
-    )
-    downloaded.append(str(dependency_root / _repo_dir_name("funasr/campplus")))
+    campplus_dir = _local_repo_dir(dependency_root, "funasr/campplus")
+    if force_download or not (campplus_dir / "campplus_cn_common.bin").is_file():
+        _call_hf_download(
+            hf_hub_download,
+            repo_id="funasr/campplus",
+            filename="campplus_cn_common.bin",
+            local_dir=str(campplus_dir),
+            **hub_kwargs,
+        )
+    downloaded.append(str(campplus_dir))
 
     bigvgan_name = _config_value(config, "vocoder.name")
     if isinstance(bigvgan_name, str) and bigvgan_name.strip() and not Path(bigvgan_name).expanduser().is_dir():
-        bigvgan_dir = dependency_root / _repo_dir_name(bigvgan_name.strip())
-        _call_hf_download(
-            hf_hub_download,
-            repo_id=bigvgan_name.strip(),
-            filename="config.json",
-            local_dir=str(bigvgan_dir),
-            **hub_kwargs,
-        )
-        _call_hf_download(
-            hf_hub_download,
-            repo_id=bigvgan_name.strip(),
-            filename="bigvgan_generator.pt",
-            local_dir=str(bigvgan_dir),
-            **hub_kwargs,
-        )
+        bigvgan_dir = _local_repo_dir(dependency_root, bigvgan_name.strip())
+        if force_download or not ((bigvgan_dir / "config.json").is_file() and (bigvgan_dir / "bigvgan_generator.pt").is_file()):
+            _call_hf_download(
+                hf_hub_download,
+                repo_id=bigvgan_name.strip(),
+                filename="config.json",
+                local_dir=str(bigvgan_dir),
+                **hub_kwargs,
+            )
+            _call_hf_download(
+                hf_hub_download,
+                repo_id=bigvgan_name.strip(),
+                filename="bigvgan_generator.pt",
+                local_dir=str(bigvgan_dir),
+                **hub_kwargs,
+            )
         downloaded.append(str(bigvgan_dir))
 
     return downloaded
@@ -534,6 +610,7 @@ class IndexTTS2ModelHandle:
     cuda_kernel: bool | None
     quantization: str
     quantization_info: dict[str, Any]
+    inference_signature: tuple[Any, ...] | None = None
 
 
 def load_model_handle(
@@ -591,6 +668,8 @@ def load_model_handle(
     if not reload_model and not rebuild_quantization_cache and key in _MODEL_CACHE:
         return _MODEL_CACHE[key]
 
+    _evict_related_model_handles(resolved_model_dir, resolved_config, keep_key=key)
+
     with hf_network_context(resolved_model_dir, hf_source, custom_endpoint, disable_ssl_verification):
         from indextts.infer_indextts2 import IndexTTS2
 
@@ -626,6 +705,44 @@ def load_model_handle(
     return handle
 
 
+def _evict_related_model_handles(model_dir: Path, config_path: Path, keep_key: tuple[Any, ...] | None = None) -> None:
+    stale_keys = [
+        key
+        for key in _MODEL_CACHE
+        if key != keep_key and len(key) >= 2 and key[0] == str(model_dir) and key[1] == str(config_path)
+    ]
+    for key in stale_keys:
+        cached = _MODEL_CACHE.pop(key, None)
+        if cached is not None:
+            cached.model = None
+    if stale_keys:
+        cleanup_torch_memory()
+
+
+def clear_model_runtime_state(model: Any) -> None:
+    if model is None:
+        return
+    for attr in (
+        "cache_spk_cond",
+        "cache_s2mel_style",
+        "cache_s2mel_prompt",
+        "cache_spk_audio_prompt",
+        "cache_emo_cond",
+        "cache_emo_audio_prompt",
+        "cache_mel",
+    ):
+        if hasattr(model, attr):
+            setattr(model, attr, None)
+
+    inference_model = getattr(getattr(model, "gpt", None), "inference_model", None)
+    if inference_model is not None:
+        if hasattr(inference_model, "cached_mel_emb"):
+            inference_model.cached_mel_emb = None
+        if hasattr(inference_model, "_cache"):
+            delattr(inference_model, "_cache")
+    cleanup_torch_memory()
+
+
 def unload_model_handle(handle: IndexTTS2ModelHandle) -> None:
     stale_keys = [key for key, cached in _MODEL_CACHE.items() if cached is handle]
     for key in stale_keys:
@@ -635,5 +752,7 @@ def unload_model_handle(handle: IndexTTS2ModelHandle) -> None:
 
 
 def clear_model_cache() -> None:
+    for handle in _MODEL_CACHE.values():
+        handle.model = None
     _MODEL_CACHE.clear()
     cleanup_torch_memory()
