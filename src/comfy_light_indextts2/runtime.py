@@ -131,6 +131,51 @@ def configure_hf_network(endpoint: str, disable_ssl_verification: bool) -> None:
         os.environ.pop("REQUESTS_CA_BUNDLE", None)
 
     try:
+        import httpx
+        from huggingface_hub import set_async_client_factory, set_client_factory
+        from huggingface_hub.utils import close_session
+    except Exception:
+        pass
+    else:
+        try:
+            from huggingface_hub.utils._http import (
+                async_hf_request_event_hook,
+                async_hf_response_event_hook,
+                hf_request_event_hook,
+            )
+        except Exception:
+            hf_request_event_hook = None
+            async_hf_request_event_hook = None
+            async_hf_response_event_hook = None
+
+        def client_factory():
+            hooks = {"request": [hf_request_event_hook]} if hf_request_event_hook else None
+            return httpx.Client(
+                event_hooks=hooks,
+                follow_redirects=True,
+                timeout=None,
+                verify=not disable_ssl_verification,
+            )
+
+        def async_client_factory():
+            hooks: dict[str, list[Any]] = {}
+            if async_hf_request_event_hook:
+                hooks["request"] = [async_hf_request_event_hook]
+            if async_hf_response_event_hook:
+                hooks["response"] = [async_hf_response_event_hook]
+            return httpx.AsyncClient(
+                event_hooks=hooks or None,
+                follow_redirects=True,
+                timeout=None,
+                verify=not disable_ssl_verification,
+            )
+
+        set_client_factory(client_factory)
+        set_async_client_factory(async_client_factory)
+        close_session()
+        return
+
+    try:
         import requests
         from huggingface_hub import configure_http_backend
     except Exception:

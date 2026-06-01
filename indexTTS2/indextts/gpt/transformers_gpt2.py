@@ -52,7 +52,11 @@ from transformers.modeling_outputs import (
 )
 # from transformers.modeling_utils import PreTrainedModel, SequenceSummary
 
-from transformers.pytorch_utils import Conv1D, find_pruneable_heads_and_indices, prune_conv1d_layer
+from transformers.pytorch_utils import Conv1D
+try:
+    from transformers.pytorch_utils import find_pruneable_heads_and_indices, prune_conv1d_layer
+except (ImportError, AttributeError):
+    from indextts.gpt.transformers_pytorch_compat import find_pruneable_heads_and_indices, prune_conv1d_layer
 from transformers.utils import (
     ModelOutput,
     add_code_sample_docstrings,
