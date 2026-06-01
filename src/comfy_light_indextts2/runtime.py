@@ -4,6 +4,7 @@ import gc
 import inspect
 import os
 import random
+import re
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -11,12 +12,17 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .paths import default_model_dir, resolve_path
+from .paths import DEFAULT_MODEL_SUBDIR, MODEL_FOLDER_NAME, default_model_dir, default_model_root, resolve_path
+from .quantization import (
+    apply_index_tts2_quantization,
+    default_quantization_cache_dir,
+    normalize_quantization,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INDEXTTS_ROOT = REPO_ROOT / "indexTTS2"
 
-_MODEL_CACHE: dict[tuple[str, str, str | None, str, bool | None], "IndexTTS2ModelHandle"] = {}
+_MODEL_CACHE: dict[tuple[Any, ...], "IndexTTS2ModelHandle"] = {}
 
 
 def ensure_indextts_import_path() -> None:
@@ -225,6 +231,55 @@ def _resolve_model_reference(model_dir: Path, reference: Any) -> Path | None:
     return path
 
 
+def _repo_dir_name(repo_id: str) -> str:
+    leaf = (repo_id or "").strip().rstrip("/").rsplit("/", 1)[-1] or DEFAULT_MODEL_SUBDIR
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", leaf).strip(".-") or DEFAULT_MODEL_SUBDIR
+
+
+def _resolve_model_dir(value: str | None, repo_id: str = "IndexTeam/IndexTTS-2") -> Path:
+    text = (value or "").strip()
+    if not text or text.lower() == "auto":
+        candidate = default_model_dir()
+        legacy = default_model_root()
+    else:
+        candidate = Path(text).expanduser()
+        legacy = candidate
+
+    if (candidate / "config.yaml").is_file():
+        return candidate.resolve()
+
+    child = candidate / _repo_dir_name(repo_id)
+    if child != candidate and (child / "config.yaml").is_file():
+        return child.resolve()
+
+    if (legacy / "config.yaml").is_file():
+        return legacy.resolve()
+
+    return candidate.resolve()
+
+
+def _resolve_download_root(local_dir: str) -> Path:
+    return resolve_path(local_dir, default_model_root()).resolve()
+
+
+def _resolve_download_target(local_dir: str, repo_id: str) -> Path:
+    root = _resolve_download_root(local_dir)
+    subdir = _repo_dir_name(repo_id)
+    if root.name == subdir:
+        return root
+    return root / subdir
+
+
+def _model_root_for_dependencies(model_dir: Path) -> Path:
+    if model_dir.name == DEFAULT_MODEL_SUBDIR or model_dir.parent.name == MODEL_FOLDER_NAME:
+        return model_dir.parent
+    return model_dir
+
+
+def _hf_cache_dir(model_dir: Path) -> Path:
+    return _model_root_for_dependencies(model_dir) / "hf_cache"
+
+
 def validate_model_files(model_dir: Path, config_path: Path) -> list[str]:
     if not model_dir.is_dir():
         raise FileNotFoundError(f"IndexTTS2 model directory not found: {model_dir}")
@@ -283,10 +338,11 @@ def download_model_snapshot(
     if not (repo_id or "").strip():
         raise ValueError("repo_id is required.")
 
-    resolved_dir = resolve_path(local_dir, default_model_dir()).resolve()
+    resolved_dir = _resolve_download_target(local_dir, repo_id)
     resolved_dir.mkdir(parents=True, exist_ok=True)
     endpoint = resolve_hf_endpoint(source, custom_endpoint)
-    os.environ["HF_HUB_CACHE"] = str(resolved_dir / "hf_cache")
+    cache_dir = _hf_cache_dir(resolved_dir)
+    os.environ["HF_HUB_CACHE"] = str(cache_dir)
     configure_hf_network(endpoint, disable_ssl_verification)
 
     from huggingface_hub import snapshot_download
@@ -296,7 +352,7 @@ def download_model_snapshot(
         "repo_type": "model",
         "revision": (revision or "main").strip() or "main",
         "local_dir": str(resolved_dir),
-        "cache_dir": str(resolved_dir / "hf_cache"),
+        "cache_dir": str(cache_dir),
         "force_download": bool(force_download),
         "allow_patterns": _csv_patterns(allow_patterns),
         "ignore_patterns": _csv_patterns(ignore_patterns),
@@ -307,6 +363,81 @@ def download_model_snapshot(
     return resolved_dir, endpoint
 
 
+def download_runtime_dependencies(
+    model_dir: Path,
+    config_path: Path,
+    *,
+    source: str,
+    custom_endpoint: str,
+    disable_ssl_verification: bool,
+    force_download: bool = False,
+) -> list[str]:
+    endpoint = resolve_hf_endpoint(source, custom_endpoint)
+    dependency_root = _model_root_for_dependencies(model_dir)
+    cache_dir = _hf_cache_dir(model_dir)
+    os.environ["HF_HUB_CACHE"] = str(cache_dir)
+    configure_hf_network(endpoint, disable_ssl_verification)
+
+    from huggingface_hub import hf_hub_download, snapshot_download
+
+    config = _load_yaml(config_path)
+    downloaded: list[str] = []
+
+    snapshot_kwargs: dict[str, Any] = {
+        "repo_id": "facebook/w2v-bert-2.0",
+        "repo_type": "model",
+        "cache_dir": str(cache_dir),
+        "local_dir": str(dependency_root / _repo_dir_name("facebook/w2v-bert-2.0")),
+        "force_download": bool(force_download),
+        "allow_patterns": [
+            "config.json",
+            "preprocessor_config.json",
+            "model.safetensors",
+            "model.safetensors.index.json",
+            "*.safetensors",
+            "pytorch_model.bin",
+        ],
+    }
+    if "local_dir_use_symlinks" in inspect.signature(snapshot_download).parameters:
+        snapshot_kwargs["local_dir_use_symlinks"] = False
+    snapshot_download(**snapshot_kwargs)
+    downloaded.append(str(dependency_root / _repo_dir_name("facebook/w2v-bert-2.0")))
+
+    hub_kwargs: dict[str, Any] = {
+        "cache_dir": str(cache_dir),
+        "force_download": bool(force_download),
+    }
+    hf_hub_download(
+        "amphion/MaskGCT",
+        filename="semantic_codec/model.safetensors",
+        local_dir=str(dependency_root / _repo_dir_name("amphion/MaskGCT")),
+        **hub_kwargs,
+    )
+    downloaded.append(str(dependency_root / _repo_dir_name("amphion/MaskGCT")))
+
+    hf_hub_download(
+        "funasr/campplus",
+        filename="campplus_cn_common.bin",
+        local_dir=str(dependency_root / _repo_dir_name("funasr/campplus")),
+        **hub_kwargs,
+    )
+    downloaded.append(str(dependency_root / _repo_dir_name("funasr/campplus")))
+
+    bigvgan_name = _config_value(config, "vocoder.name")
+    if isinstance(bigvgan_name, str) and bigvgan_name.strip() and not Path(bigvgan_name).expanduser().is_dir():
+        bigvgan_dir = dependency_root / _repo_dir_name(bigvgan_name.strip())
+        hf_hub_download(bigvgan_name.strip(), filename="config.json", local_dir=str(bigvgan_dir), **hub_kwargs)
+        hf_hub_download(
+            bigvgan_name.strip(),
+            filename="bigvgan_generator.pt",
+            local_dir=str(bigvgan_dir),
+            **hub_kwargs,
+        )
+        downloaded.append(str(bigvgan_dir))
+
+    return downloaded
+
+
 @contextmanager
 def hf_network_context(
     model_dir: Path,
@@ -315,7 +446,7 @@ def hf_network_context(
     disable_ssl_verification: bool = False,
 ):
     endpoint = resolve_hf_endpoint(source, custom_endpoint)
-    os.environ["HF_HUB_CACHE"] = str(model_dir / "hf_cache")
+    os.environ["HF_HUB_CACHE"] = str(_hf_cache_dir(model_dir))
     configure_hf_network(endpoint, disable_ssl_verification)
     yield endpoint
 
@@ -328,6 +459,8 @@ class IndexTTS2ModelHandle:
     device: str
     precision: str
     cuda_kernel: bool | None
+    quantization: str
+    quantization_info: dict[str, Any]
 
 
 def load_model_handle(
@@ -340,9 +473,13 @@ def load_model_handle(
     hf_source: str = "huggingface",
     custom_endpoint: str = "",
     disable_ssl_verification: bool = False,
+    quantization: str = "none",
+    use_quantization_cache: bool = True,
+    rebuild_quantization_cache: bool = False,
+    quantized_linear_chunk_size: int = 1024,
 ) -> IndexTTS2ModelHandle:
     ensure_indextts_import_path()
-    resolved_model_dir = resolve_path(model_dir, default_model_dir()).resolve()
+    resolved_model_dir = _resolve_model_dir(model_dir)
     config_text = (config_path or "").strip()
     if not config_text or config_text.lower() == "auto":
         resolved_config = resolved_model_dir / "config.yaml"
@@ -362,8 +499,23 @@ def load_model_handle(
     if str(actual_device).startswith("mps") and actual_precision in {"fp8", "fp16", "bf16"}:
         actual_precision = "fp32"
     actual_cuda_kernel = normalize_cuda_kernel(cuda_kernel)
-    key = (str(resolved_model_dir), str(resolved_config), selected_device, actual_precision, actual_cuda_kernel)
-    if not reload_model and key in _MODEL_CACHE:
+    actual_quantization = normalize_quantization(quantization)
+    quantization_cache_dir = (
+        default_quantization_cache_dir(resolved_model_dir)
+        if actual_quantization is not None and bool(use_quantization_cache)
+        else None
+    )
+    key = (
+        str(resolved_model_dir),
+        str(resolved_config),
+        selected_device,
+        actual_precision,
+        actual_cuda_kernel,
+        actual_quantization,
+        str(quantization_cache_dir.resolve()) if quantization_cache_dir else None,
+        int(quantized_linear_chunk_size),
+    )
+    if not reload_model and not rebuild_quantization_cache and key in _MODEL_CACHE:
         return _MODEL_CACHE[key]
 
     with hf_network_context(resolved_model_dir, hf_source, custom_endpoint, disable_ssl_verification):
@@ -377,6 +529,16 @@ def load_model_handle(
             device=selected_device,
             use_cuda_kernel=actual_cuda_kernel,
         )
+    quantization_info = apply_index_tts2_quantization(
+        model,
+        model_dir=resolved_model_dir,
+        config_path=resolved_config,
+        mode=actual_quantization,
+        cache_dir=quantization_cache_dir,
+        rebuild_cache=bool(rebuild_quantization_cache),
+        chunk_size=int(quantized_linear_chunk_size),
+    )
+    cleanup_torch_memory()
     handle = IndexTTS2ModelHandle(
         model=model,
         model_dir=resolved_model_dir,
@@ -384,6 +546,8 @@ def load_model_handle(
         device=model.device,
         precision=getattr(model, "precision_name", actual_precision).upper(),
         cuda_kernel=model.use_cuda_kernel,
+        quantization=quantization_info["mode"],
+        quantization_info=quantization_info,
     )
     _MODEL_CACHE[key] = handle
     return handle

@@ -1,11 +1,11 @@
 {
   "ComfyLightIndexTTS2LoadModel": {
     "display_name": "加载 IndexTTS2 模型",
-    "description": "加载本地 IndexTTS2 模型，默认从 ComfyUI/models/IndexTTS2 读取权重。",
+    "description": "加载本地 IndexTTS2 模型，默认从 ComfyUI/models/IndexTTS2/IndexTTS-2 读取权重。",
     "inputs": {
       "model_dir": {
         "name": "模型目录",
-        "tooltip": "IndexTTS2 权重目录。auto 使用 ComfyUI/models/IndexTTS2。"
+        "tooltip": "IndexTTS2 主模型目录。auto 使用 ComfyUI/models/IndexTTS2/IndexTTS-2，并兼容旧的 ComfyUI/models/IndexTTS2 平铺目录。"
       },
       "config_path": {
         "name": "配置文件",
@@ -37,6 +37,27 @@
           "disabled": "禁用"
         }
       },
+      "quantization": {
+        "name": "线性层量化",
+        "tooltip": "对模型中的 Linear 层启用 weight-only 量化以降低显存占用。",
+        "options": {
+          "none": "不量化",
+          "FP8": "FP8",
+          "FP4": "FP4"
+        }
+      },
+      "use_quantization_cache": {
+        "name": "量化缓存",
+        "tooltip": "将 FP8/FP4 量化后的 Linear 权重保存到 IndexTTS2-cache 并复用。"
+      },
+      "rebuild_quantization_cache": {
+        "name": "重建量化缓存",
+        "tooltip": "忽略已有 IndexTTS2-cache 量化文件并重新生成。"
+      },
+      "quantized_linear_chunk_size": {
+        "name": "量化分块行数",
+        "tooltip": "大型量化 Linear 层每块反量化的行数。设为 0 表示禁用分块。"
+      },
       "reload_model": {
         "name": "重新加载",
         "tooltip": "忽略缓存并重新实例化模型。"
@@ -55,7 +76,7 @@
   },
   "ComfyLightIndexTTS2OnlineLoadModel": {
     "display_name": "在线加载 IndexTTS2 模型",
-    "description": "从 Hugging Face、hf-mirror 或自定义反向代理下载并加载 IndexTTS2 模型。",
+    "description": "从 Hugging Face、hf-mirror 或自定义反向代理下载 IndexTTS2 主模型与依赖模型到独立子目录并加载。",
     "inputs": {
       "repo_id": {
         "name": "模型仓库",
@@ -66,12 +87,12 @@
         "tooltip": "分支、标签或提交哈希。"
       },
       "local_dir": {
-        "name": "本地模型目录",
-        "tooltip": "模型下载与加载目录。auto 使用 ComfyUI/models/IndexTTS2。"
+        "name": "本地模型根目录",
+        "tooltip": "模型下载根目录。auto 使用 ComfyUI/models/IndexTTS2，并在其中为主模型和依赖模型创建子目录。"
       },
       "config_path": {
         "name": "配置文件",
-        "tooltip": "config.yaml 路径。auto 使用本地模型目录下的 config.yaml。"
+        "tooltip": "config.yaml 路径。auto 使用主模型子目录下的 config.yaml。"
       },
       "download_source": {
         "name": "下载源",
@@ -115,6 +136,27 @@
           "enabled": "启用",
           "disabled": "禁用"
         }
+      },
+      "quantization": {
+        "name": "线性层量化",
+        "tooltip": "对模型中的 Linear 层启用 weight-only 量化以降低显存占用。",
+        "options": {
+          "none": "不量化",
+          "FP8": "FP8",
+          "FP4": "FP4"
+        }
+      },
+      "use_quantization_cache": {
+        "name": "量化缓存",
+        "tooltip": "将 FP8/FP4 量化后的 Linear 权重保存到 IndexTTS2-cache 并复用。"
+      },
+      "rebuild_quantization_cache": {
+        "name": "重建量化缓存",
+        "tooltip": "忽略已有 IndexTTS2-cache 量化文件并重新生成。"
+      },
+      "quantized_linear_chunk_size": {
+        "name": "量化分块行数",
+        "tooltip": "大型量化 Linear 层每块反量化的行数。设为 0 表示禁用分块。"
       },
       "force_download": {
         "name": "强制重新下载",

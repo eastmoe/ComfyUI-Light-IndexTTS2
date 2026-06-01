@@ -12,13 +12,15 @@ from .constants import (
     HF_SOURCE_OPTIONS,
     MODEL_TYPE,
     PRECISION_OPTIONS,
+    QUANTIZATION_OPTIONS,
     ui,
 )
-from .paths import default_model_dir, resolve_output_path
+from .paths import default_model_dir, default_model_root, resolve_output_path
 from .runtime import (
     IndexTTS2ModelHandle,
     cleanup_torch_memory,
     download_model_snapshot,
+    download_runtime_dependencies,
     load_model_handle,
     set_seed,
     unload_model_handle,
@@ -35,7 +37,7 @@ class ComfyLightIndexTTS2LoadModel:
                     "STRING",
                     ui(
                         "模型目录",
-                        "IndexTTS2 权重目录。auto 使用 ComfyUI/models/IndexTTS2。",
+                        "IndexTTS2 主模型目录。auto 使用 ComfyUI/models/IndexTTS2/IndexTTS-2，并兼容旧的 ComfyUI/models/IndexTTS2 平铺目录。",
                         default="auto",
                     ),
                 ),
@@ -59,6 +61,22 @@ class ComfyLightIndexTTS2LoadModel:
                     CUDA_KERNEL_OPTIONS,
                     ui("BigVGAN CUDA 内核", "auto 使用 IndexTTS2 默认策略；仅 CUDA 可用。"),
                 ),
+                "quantization": (
+                    QUANTIZATION_OPTIONS,
+                    ui("线性层量化", "对模型中的 Linear 层启用 weight-only 量化以降低显存占用。"),
+                ),
+                "use_quantization_cache": (
+                    "BOOLEAN",
+                    ui("量化缓存", "将 FP8/FP4 量化后的 Linear 权重保存到 IndexTTS2-cache 并复用。", default=True),
+                ),
+                "rebuild_quantization_cache": (
+                    "BOOLEAN",
+                    ui("重建量化缓存", "忽略已有 IndexTTS2-cache 量化文件并重新生成。", default=False),
+                ),
+                "quantized_linear_chunk_size": (
+                    "INT",
+                    ui("量化分块行数", "大型量化 Linear 层每块反量化的行数。设为 0 表示禁用分块。", default=1024, min=0, max=65536, step=64),
+                ),
                 "reload_model": (
                     "BOOLEAN",
                     ui("重新加载", "忽略缓存并重新实例化模型。", default=False),
@@ -70,7 +88,7 @@ class ComfyLightIndexTTS2LoadModel:
     RETURN_NAMES = ("模型", "信息")
     FUNCTION = "load"
     CATEGORY = CATEGORY
-    DESCRIPTION = "加载 IndexTTS2 模型，默认从 ComfyUI/models/IndexTTS2 读取权重。"
+    DESCRIPTION = "加载 IndexTTS2 模型，默认从 ComfyUI/models/IndexTTS2/IndexTTS-2 读取权重。"
 
     def load(
         self,
@@ -79,6 +97,10 @@ class ComfyLightIndexTTS2LoadModel:
         device: str = "auto",
         precision: str = "FP16",
         cuda_kernel: str = "auto",
+        quantization: str = "none",
+        use_quantization_cache: bool = True,
+        rebuild_quantization_cache: bool = False,
+        quantized_linear_chunk_size: int = 1024,
         reload_model: bool = False,
         fp16: bool | None = None,
     ):
@@ -91,6 +113,10 @@ class ComfyLightIndexTTS2LoadModel:
             precision=precision,
             cuda_kernel=cuda_kernel,
             reload_model=bool(reload_model),
+            quantization=quantization,
+            use_quantization_cache=bool(use_quantization_cache),
+            rebuild_quantization_cache=bool(rebuild_quantization_cache),
+            quantized_linear_chunk_size=int(quantized_linear_chunk_size),
         )
         info = {
             "model_dir": str(handle.model_dir),
@@ -98,6 +124,9 @@ class ComfyLightIndexTTS2LoadModel:
             "device": handle.device,
             "precision": handle.precision,
             "cuda_kernel": handle.cuda_kernel,
+            "quantization": handle.quantization,
+            "quantization_info": handle.quantization_info,
+            "default_model_root": str(default_model_root()),
             "default_model_dir": str(default_model_dir()),
         }
         return (handle, json.dumps(info, ensure_ascii=False, indent=2))
@@ -118,11 +147,11 @@ class ComfyLightIndexTTS2OnlineLoadModel:
                 ),
                 "local_dir": (
                     "STRING",
-                    ui("本地模型目录", "模型下载与加载目录。auto 使用 ComfyUI/models/IndexTTS2。", default="auto"),
+                    ui("本地模型根目录", "模型下载根目录。auto 使用 ComfyUI/models/IndexTTS2，并在其中为主模型和依赖模型创建子目录。", default="auto"),
                 ),
                 "config_path": (
                     "STRING",
-                    ui("配置文件", "config.yaml 路径。auto 使用本地模型目录下的 config.yaml。", default="auto"),
+                    ui("配置文件", "config.yaml 路径。auto 使用主模型子目录下的 config.yaml。", default="auto"),
                 ),
                 "download_source": (
                     HF_SOURCE_OPTIONS,
@@ -147,6 +176,22 @@ class ComfyLightIndexTTS2OnlineLoadModel:
                 "cuda_kernel": (
                     CUDA_KERNEL_OPTIONS,
                     ui("BigVGAN CUDA 内核", "auto 使用 IndexTTS2 默认策略；仅 CUDA 可用。"),
+                ),
+                "quantization": (
+                    QUANTIZATION_OPTIONS,
+                    ui("线性层量化", "对模型中的 Linear 层启用 weight-only 量化以降低显存占用。"),
+                ),
+                "use_quantization_cache": (
+                    "BOOLEAN",
+                    ui("量化缓存", "将 FP8/FP4 量化后的 Linear 权重保存到 IndexTTS2-cache 并复用。", default=True),
+                ),
+                "rebuild_quantization_cache": (
+                    "BOOLEAN",
+                    ui("重建量化缓存", "忽略已有 IndexTTS2-cache 量化文件并重新生成。", default=False),
+                ),
+                "quantized_linear_chunk_size": (
+                    "INT",
+                    ui("量化分块行数", "大型量化 Linear 层每块反量化的行数。设为 0 表示禁用分块。", default=1024, min=0, max=65536, step=64),
                 ),
                 "force_download": (
                     "BOOLEAN",
@@ -173,7 +218,7 @@ class ComfyLightIndexTTS2OnlineLoadModel:
     RETURN_NAMES = ("模型", "信息")
     FUNCTION = "load"
     CATEGORY = CATEGORY
-    DESCRIPTION = "从 Hugging Face、hf-mirror 或自定义反向代理下载并加载 IndexTTS2 模型。"
+    DESCRIPTION = "从 Hugging Face、hf-mirror 或自定义反向代理下载 IndexTTS2 主模型与依赖模型到独立子目录并加载。"
 
     def load(
         self,
@@ -187,6 +232,10 @@ class ComfyLightIndexTTS2OnlineLoadModel:
         device: str = "auto",
         precision: str = "FP16",
         cuda_kernel: str = "auto",
+        quantization: str = "none",
+        use_quantization_cache: bool = True,
+        rebuild_quantization_cache: bool = False,
+        quantized_linear_chunk_size: int = 1024,
         force_download: bool = False,
         reload_model: bool = False,
         allow_patterns: str = "",
@@ -207,6 +256,14 @@ class ComfyLightIndexTTS2OnlineLoadModel:
         if not resolved_config.is_absolute():
             resolved_config = model_dir / resolved_config
         checked = validate_model_files(model_dir, resolved_config.resolve())
+        dependencies = download_runtime_dependencies(
+            model_dir,
+            resolved_config.resolve(),
+            source=download_source,
+            custom_endpoint=custom_endpoint,
+            disable_ssl_verification=bool(disable_ssl_verification),
+            force_download=bool(force_download),
+        )
         handle = load_model_handle(
             model_dir=str(model_dir),
             config_path=str(resolved_config),
@@ -217,6 +274,10 @@ class ComfyLightIndexTTS2OnlineLoadModel:
             hf_source=download_source,
             custom_endpoint=custom_endpoint,
             disable_ssl_verification=bool(disable_ssl_verification),
+            quantization=quantization,
+            use_quantization_cache=bool(use_quantization_cache),
+            rebuild_quantization_cache=bool(rebuild_quantization_cache),
+            quantized_linear_chunk_size=int(quantized_linear_chunk_size),
         )
         info = {
             "repo_id": repo_id,
@@ -225,9 +286,12 @@ class ComfyLightIndexTTS2OnlineLoadModel:
             "model_dir": str(handle.model_dir),
             "config_path": str(handle.config_path),
             "validated_items": checked,
+            "downloaded_dependencies": dependencies,
             "device": handle.device,
             "precision": handle.precision,
             "cuda_kernel": handle.cuda_kernel,
+            "quantization": handle.quantization,
+            "quantization_info": handle.quantization_info,
             "ssl_verification": not bool(disable_ssl_verification),
         }
         return (handle, json.dumps(info, ensure_ascii=False, indent=2))

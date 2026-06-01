@@ -5,8 +5,9 @@
 ## 节点
 
 - `加载 IndexTTS2 模型`
-  - 默认模型路径：`ComfyUI/models/IndexTTS2`
+  - 默认模型路径：`ComfyUI/models/IndexTTS2/IndexTTS-2`
   - 默认配置文件：模型目录下的 `config.yaml`
+  - `auto` 会优先读取新的子目录布局，并兼容旧的 `ComfyUI/models/IndexTTS2` 平铺目录。
   - 加载前会校验本地 `config.yaml` 及其引用的关键权重文件。
   - 支持 `auto/cuda/xpu/cpu/mps` 设备选择、FP8/FP16/BF16/FP32 计算精度、BigVGAN CUDA kernel 开关和模型缓存重载。
 
@@ -14,7 +15,7 @@
   - 默认模型仓库：`IndexTeam/IndexTTS-2`
   - 支持从 Hugging Face、`hf-mirror.com` 或自定义 Hugging Face 反向代理下载模型。
   - 自定义端点可填写 host name、IP address 或完整 URL，并可关闭 SSL 证书验证以适配自签名代理或受控内网。
-  - 下载后会先校验本地模型，再按所选设备与计算精度加载。
+  - `local_dir=auto` 时会把主模型和依赖模型分别下载到 `ComfyUI/models/IndexTTS2` 下的独立子目录，先补齐依赖再按所选设备与计算精度加载。
 
 - `IndexTTS2 语音合成（说话人音频）`
   - 使用同一段说话人参考 `AUDIO` 同时控制音色和情感。
@@ -37,13 +38,34 @@
 
 ## 模型目录
 
-将 IndexTTS2 权重放到：
+推荐使用新的子目录布局管理 IndexTTS2 主模型和依赖模型：
 
 ```text
 ComfyUI/models/IndexTTS2/
+├── IndexTTS-2/
+│   ├── config.yaml
+│   ├── gpt.pth
+│   ├── s2mel.pth
+│   ├── wav2vec2bert_stats.pt
+│   ├── bpe.model
+│   └── qwen0.6bemo4-merge/
+├── w2v-bert-2.0/
+├── MaskGCT/
+├── campplus/
+├── bigvgan_v2_22khz_80band_256x/
+├── IndexTTS2-cache/
+└── hf_cache/
 ```
 
-目录中应包含 `config.yaml` 以及该配置引用的 GPT、S2Mel、BPE、情感矩阵等文件。依赖的 Hugging Face 模型会沿用 IndexTTS2 原逻辑下载，缓存目录默认指向模型目录下的 `hf_cache`。
+`IndexTTS-2/` 中应包含 `config.yaml` 以及该配置引用的 GPT、S2Mel、BPE、情感矩阵等文件。在线加载节点会在根目录下为 `w2v-bert-2.0`、`MaskGCT`、`campplus` 和 BigVGAN 创建独立目录；Hugging Face 缓存统一放在 `hf_cache/`，量化缓存放在 `IndexTTS2-cache/`。
+
+旧版平铺布局仍可使用：
+
+```text
+ComfyUI/models/IndexTTS2/config.yaml
+```
+
+当 `model_dir` 为 `auto` 且不存在 `IndexTTS-2/config.yaml` 时，加载器会自动回退到这个旧目录。
 
 ## 项目结构
 

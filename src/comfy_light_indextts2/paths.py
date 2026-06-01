@@ -9,6 +9,7 @@ except ImportError:
 
 
 MODEL_FOLDER_NAME = "IndexTTS2"
+DEFAULT_MODEL_SUBDIR = "IndexTTS-2"
 
 
 def comfy_models_dir() -> Path:
@@ -30,6 +31,10 @@ def comfy_temp_dir() -> Path:
 
 
 def default_model_dir() -> Path:
+    return default_model_root() / DEFAULT_MODEL_SUBDIR
+
+
+def default_model_root() -> Path:
     return comfy_models_dir() / MODEL_FOLDER_NAME
 
 
@@ -55,7 +60,7 @@ def resolve_output_path(output_path: str) -> Path | None:
 def register_model_folder() -> None:
     if folder_paths is None or not hasattr(folder_paths, "folder_names_and_paths"):
         return
-    model_dir = default_model_dir()
+    model_dir = default_model_root()
     current = folder_paths.folder_names_and_paths.get(MODEL_FOLDER_NAME)
     if current is None:
         folder_paths.folder_names_and_paths[MODEL_FOLDER_NAME] = ([str(model_dir)], set())
