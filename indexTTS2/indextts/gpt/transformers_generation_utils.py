@@ -43,6 +43,7 @@ except (ImportError, AttributeError):
                 setattr(self, key, value)
 
 from transformers.configuration_utils import PretrainedConfig
+from indextts.gpt.transformers_config_compat import get_non_default_generation_parameters
 try:
     from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 except (ImportError, AttributeError):
@@ -1607,7 +1608,7 @@ class GenerationMixin:
                 not is_torchdynamo_compiling()
                 and self.generation_config._from_model_config  # 1)
                 and self.generation_config._original_object_hash == hash(self.generation_config)  # 2)
-                and len(self.config._get_non_default_generation_parameters()) > 0  # 3)
+                and len(get_non_default_generation_parameters(self.config)) > 0  # 3)
             ):
                 new_generation_config = GenerationConfig.from_model_config(self.config)
                 if new_generation_config != self.generation_config:  # 4)

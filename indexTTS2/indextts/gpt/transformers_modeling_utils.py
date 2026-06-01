@@ -44,6 +44,7 @@ from transformers.configuration_utils import PretrainedConfig
 from transformers.dynamic_module_utils import custom_object_save
 from transformers.generation import GenerationConfig
 import transformers
+from indextts.gpt.transformers_config_compat import get_non_default_generation_parameters
 from indextts.gpt.transformers_generation_utils import GenerationMixin
 from transformers.generation import GenerationConfig
 
@@ -2853,7 +2854,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
         if is_main_process:
             if not _hf_peft_config_loaded:
                 # If the model config has set attributes that should be in the generation config, move them there.
-                misplaced_generation_parameters = model_to_save.config._get_non_default_generation_parameters()
+                misplaced_generation_parameters = get_non_default_generation_parameters(model_to_save.config)
                 if self.can_generate() and len(misplaced_generation_parameters) > 0:
                     warnings.warn(
                         "Moving the following attributes in the config to the generation config: "
