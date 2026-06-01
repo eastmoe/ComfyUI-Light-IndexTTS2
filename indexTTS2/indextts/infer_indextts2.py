@@ -30,6 +30,21 @@ from indextts.s2mel.modules.audio import mel_spectrogram
 from indextts.utils.front import TextNormalizer, TextTokenizer
 
 
+def _save_wav_compat(output_path, wav, sampling_rate):
+    try:
+        torchaudio.save(output_path, wav, sampling_rate)
+        return
+    except ImportError:
+        pass
+
+    from scipy.io import wavfile
+
+    data = wav.detach().cpu().numpy()
+    if data.ndim == 2:
+        data = data.T
+    wavfile.write(output_path, int(sampling_rate), data)
+
+
 def _normalize_precision(precision=None, is_fp16=True):
     if precision is None:
         return "fp16" if is_fp16 else "fp32"
@@ -669,7 +684,7 @@ class IndexTTS2:
                 print(">> remove old wav file:", output_path)
             if os.path.dirname(output_path) != "":
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            torchaudio.save(output_path, wav.type(torch.int16), sampling_rate)
+            _save_wav_compat(output_path, wav.type(torch.int16), sampling_rate)
             print(">> wav file saved to:", output_path)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()

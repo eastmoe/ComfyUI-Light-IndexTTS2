@@ -7,6 +7,50 @@ from typing import Any
 from .paths import comfy_temp_dir
 
 
+def _save_wav(path: Path, waveform, sample_rate: int) -> None:
+    try:
+        import torchaudio
+
+        torchaudio.save(str(path), waveform, sample_rate)
+        return
+    except ImportError:
+        pass
+
+    import numpy as np
+    from scipy.io import wavfile
+
+    data = waveform.detach().cpu().numpy()
+    if data.ndim == 2:
+        data = data.T
+    data = np.clip(data, -1.0, 1.0)
+    wavfile.write(str(path), int(sample_rate), (data * 32767.0).astype(np.int16))
+
+
+def _load_wav(path: Path):
+    try:
+        import torchaudio
+
+        return torchaudio.load(str(path))
+    except ImportError:
+        pass
+
+    import numpy as np
+    import torch
+    from scipy.io import wavfile
+
+    sample_rate, data = wavfile.read(str(path))
+    if np.issubdtype(data.dtype, np.integer):
+        scale = max(abs(np.iinfo(data.dtype).min), np.iinfo(data.dtype).max)
+        data = data.astype(np.float32) / float(scale)
+    else:
+        data = data.astype(np.float32, copy=False)
+    if data.ndim == 1:
+        data = data[None, :]
+    else:
+        data = data.T
+    return torch.from_numpy(np.ascontiguousarray(data)), int(sample_rate)
+
+
 def select_audio_batch(audio: dict[str, Any], batch_index: int = 0):
     import torch
 
@@ -32,7 +76,7 @@ def select_audio_batch(audio: dict[str, Any], batch_index: int = 0):
 
 def audio_to_temp_wav(audio: dict[str, Any], prefix: str, batch_index: int = 0) -> Path:
     import numpy as np
-    import torchaudio
+    import torch
 
     waveform, sample_rate = select_audio_batch(audio, batch_index)
     if waveform.numel() == 0:
@@ -49,7 +93,7 @@ def audio_to_temp_wav(audio: dict[str, Any], prefix: str, batch_index: int = 0) 
     temp_dir.mkdir(parents=True, exist_ok=True)
     path = temp_dir / f"{prefix}_{digest.hexdigest()[:24]}.wav"
     if not path.is_file():
-        torchaudio.save(str(path), mono, sample_rate)
+        _save_wav(path, mono, sample_rate)
     return path
 
 
@@ -70,7 +114,5 @@ def comfy_audio_from_infer_result(result: tuple[int, Any]) -> dict[str, Any]:
 
 
 def comfy_audio_from_wav(path: Path) -> dict[str, Any]:
-    import torchaudio
-
-    waveform, sample_rate = torchaudio.load(str(path))
+    waveform, sample_rate = _load_wav(path)
     return {"waveform": waveform.float().unsqueeze(0).clamp(-1.0, 1.0), "sample_rate": int(sample_rate)}
