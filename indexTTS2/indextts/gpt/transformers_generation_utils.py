@@ -43,7 +43,10 @@ except (ImportError, AttributeError):
                 setattr(self, key, value)
 
 from transformers.configuration_utils import PretrainedConfig
-from indextts.gpt.transformers_config_compat import get_non_default_generation_parameters
+from indextts.gpt.transformers_config_compat import (
+    ensure_generation_config_compat,
+    get_non_default_generation_parameters,
+)
 try:
     from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 except (ImportError, AttributeError):
@@ -2092,6 +2095,7 @@ class GenerationMixin:
         assistant_tokenizer = kwargs.pop("assistant_tokenizer", None)  # only used for assisted generation
 
         generation_config, model_kwargs = self._prepare_generation_config(generation_config, **kwargs)
+        ensure_generation_config_compat(generation_config, model_kwargs)
         self._validate_model_kwargs(model_kwargs.copy())
         self._validate_assistant(assistant_model, tokenizer, assistant_tokenizer)
 
