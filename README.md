@@ -1,106 +1,33 @@
 # ComfyUI-Light-IndexTTS2
 
-`ComfyUI-Light-IndexTTS2` 是基于当前裁剪版 IndexTTS2 项目的 ComfyUI 插件封装。节点注册在 `eastmoe/Comfy-Light-IndexTTS2` 菜单下，并复用 ComfyUI 原生 `AUDIO` 类型，方便接入加载音频、剪辑音频、保存音频等工作流。
+在 ComfyUI 中使用 IndexTTS2 合成 22050 Hz 语音。支持参考音色克隆，以及参考音频、八维情感权重和情感文本控制。长文本按段生成后拼接。
 
-## 节点
+## 安装与模型
 
-- `加载 IndexTTS2 模型`
-  - 默认模型路径：`ComfyUI/models/IndexTTS2/IndexTTS-2`
-  - 默认配置文件：模型目录下的 `config.yaml`
-  - `auto` 会优先读取新的子目录布局，并兼容旧的 `ComfyUI/models/IndexTTS2` 平铺目录。
-  - 加载前会校验本地 `config.yaml` 及其引用的关键权重文件。
-  - 支持 `auto/cuda/xpu/cpu/mps` 设备选择、FP8/FP16/BF16/FP32 计算精度、BigVGAN CUDA kernel 开关和模型缓存重载。
+将仓库放入 `ComfyUI/custom_nodes/`，使用 ComfyUI 的 Python 环境安装依赖：
 
-- `在线加载 IndexTTS2 模型`
-  - 默认模型仓库：`IndexTeam/IndexTTS-2`
-  - 支持从 Hugging Face、`hf-mirror.com` 或自定义 Hugging Face 反向代理下载模型。
-  - 自定义端点可填写 host name、IP address 或完整 URL，并可关闭 SSL 证书验证以适配自签名代理或受控内网。
-  - `local_dir=auto` 时会把主模型和依赖模型分别下载到 `ComfyUI/models/IndexTTS2` 下的独立子目录，先补齐依赖再按所选设备与计算精度加载。
-
-- `IndexTTS2 语音合成（说话人音频）`
-  - 使用同一段说话人参考 `AUDIO` 同时控制音色和情感。
-
-- `IndexTTS2 语音合成（情感音频）`
-  - 使用说话人参考 `AUDIO` 控制音色，并使用独立情感参考 `AUDIO` 控制情感表达。
-  - 说话人参考 `AUDIO` 是可选输入；未连接时会使用情感参考 `AUDIO` 兼作音色参考。
-
-- `IndexTTS2 语音合成（情感向量）`
-  - 使用八维情感向量控制情感表达，适合精确调节喜悦、愤怒、悲伤、恐惧、厌恶、低落、惊喜和自然程度。
-
-- `IndexTTS2 语音合成（情感文本）`
-  - 使用情感文本经 Qwen 情感分析得到情感向量；情感文本为空时使用合成文本。
-
-四个语音合成节点共享：
-  - 输入：模型句柄、说话人参考 `AUDIO`、合成文本。
-  - 输出：ComfyUI 原生 `AUDIO`、可选 wav 输出路径、JSON 信息。
-  - 覆盖 `infer.py` 的主要功能：文本文件、目标时长、文本切分、GPT 采样参数、typical sampling、S2Mel 扩散参数、随机种子、详细日志和 wav 输出。
-  - 可选择生成后自动卸载模型并清理 CUDA/Intel XPU/MPS 显存缓存。
-
-## 模型目录
-
-推荐使用新的子目录布局管理 IndexTTS2 主模型和依赖模型：
-
-```text
-ComfyUI/models/IndexTTS2/
-├── IndexTTS-2/
-│   ├── config.yaml
-│   ├── gpt.pth
-│   ├── s2mel.pth
-│   ├── wav2vec2bert_stats.pt
-│   ├── bpe.model
-│   └── qwen0.6bemo4-merge/
-├── w2v-bert-2.0/
-├── MaskGCT/
-├── campplus/
-├── bigvgan_v2_22khz_80band_256x/
-├── IndexTTS2-cache/
-└── hf_cache/
+```shell
+python -m pip install -r requirements.txt
 ```
 
-`IndexTTS-2/` 中应包含 `config.yaml` 以及该配置引用的 GPT、S2Mel、BPE、情感矩阵等文件。在线加载节点会在根目录下为 `w2v-bert-2.0`、`MaskGCT`、`campplus` 和 BigVGAN 创建独立目录；Hugging Face 缓存统一放在 `hf_cache/`，量化缓存放在 `IndexTTS2-cache/`。
+从 [eastmoe/IndexTTS-Comfy](https://huggingface.co/eastmoe/IndexTTS-Comfy) 下载 IndexTTS2 `.safetensors`，放入 `ComfyUI/models/checkpoints/`，重启 ComfyUI。
 
-旧版平铺布局仍可使用：
+## 用法
 
-```text
-ComfyUI/models/IndexTTS2/config.yaml
-```
+导入示例工作流，选择 checkpoint，载入参考音频，填写文本后运行：
 
-当 `model_dir` 为 `auto` 且不存在 `IndexTTS-2/config.yaml` 时，加载器会自动回退到这个旧目录。
+- [参考音色与情感](examples/speaker.json)：同一段参考音频控制音色和情感。
+- [独立情感音频](examples/emotion_audio.json)：分别设置音色参考和情感参考；音色参考留空时使用情感音频。
+- [八维情感权重](examples/emotion_vector.json)：调整高兴、愤怒、悲伤、恐惧、厌恶、低落、惊讶、自然的权重。
+- [情感文本](examples/emotion_text.json)：输入情感描述；留空时分析待合成文本。
 
-## 下载卡住
+自定义节点位于 `eastmoe → IndexTTS`。加载器输出 `MODEL`、`CLIP`、`VAE`。条件编码器与引导器提供语音条件，AR / CFM 采样器、随机源、CFM 采样计划和空 Mel Latent 接入原生 `SamplerCustomAdvanced`。输出经原生 `VAE Decode Audio` 解码，再由音频分段拼接节点合并，连接 `Save Audio` 保存。
 
-在线加载节点默认会禁用 Hugging Face Xet 下载通道，并把 `snapshot_download` 限制为单线程，以降低大文件下载到一半无吞吐的概率。可通过环境变量调整：
+`max_text_tokens` 控制每段文本的 token 上限，`max_tokens` 控制每段语义 token 上限。空 Mel Latent 的 `seconds` 设置每段最大容量，`target_duration` 提供 GPT 时长条件。`steps` 设置 CFM Euler 积分步数，`cfm_cfg` 默认 0.7，对应常规 CFG 1.7。各参数的含义可在节点悬停提示中查看。
 
-```bash
-export HF_HUB_DISABLE_XET=1
-export HF_HUB_DOWNLOAD_TIMEOUT=60
-export HF_HUB_ETAG_TIMEOUT=30
-export INDEXTTS2_HF_DOWNLOAD_WORKERS=1
-```
+## 上游项目
 
-如果 Hugging Face 直连仍然不稳定，优先把节点里的 `download_source` 改为 `hf-mirror` 后重新运行。已有的 `.incomplete` 下载会继续复用，通常不需要删除。
-
-## 项目结构
-
-```text
-ComfyUI-Light-IndexTTS2/
-├── __init__.py
-├── src/comfy_light_indextts2/
-├── locales/zh-CN/nodeDefs.json
-├── locales/zh-cn/nodeDefs.json
-├── locales/zh/nodeDefs.json
-├── doc/
-├── temp/
-├── static/
-└── workflow/
-```
-
-`locales/*/nodeDefs.json` 是当前 ComfyUI 前端实际读取的节点翻译文件。
-
-## 使用
-
-1. 重启 ComfyUI。
-2. 在右键菜单中选择 `eastmoe -> Comfy-Light-IndexTTS2`。
-3. 添加 `加载 IndexTTS2 模型` 节点；如果需要自动下载，改用 `在线加载 IndexTTS2 模型` 节点。
-4. 按情感控制方式添加对应的 `IndexTTS2 语音合成（...）` 节点，把模型输出和参考音频接入。
-5. 运行工作流，合成结果会作为 ComfyUI `AUDIO` 返回；填写 `output_path` 时也会保存 wav。
+- [IndexTTS](https://github.com/index-tts/index-tts)
+- [ComfyUI](https://github.com/Comfy-Org/ComfyUI)
+- [BigVGAN](https://github.com/NVIDIA/BigVGAN)
+- [Amphion / MaskGCT](https://github.com/open-mmlab/Amphion)

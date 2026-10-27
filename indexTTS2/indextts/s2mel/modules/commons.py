@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 
-from indextts.utils.compat import torch_load
 
 
 @torch.jit.script
@@ -23,6 +22,7 @@ def sequence_mask(length, max_length=None):
 class MyModel(nn.Module):
     def __init__(self, args, use_emovec=False, use_gpt_latent=False):
         super().__init__()
+        # Both modules import sequence_mask from this module.
         from indextts.s2mel.modules.flow_matching import CFM
         from indextts.s2mel.modules.length_regulator import InterpolateRegulator
 
@@ -50,51 +50,3 @@ class MyModel(nn.Module):
                 nn.Linear(128, 1024),
             )
         self.models = nn.ModuleDict(modules)
-
-    def forward_gpt(self, x):
-        return self.models["gpt_layer"](x)
-
-
-def load_checkpoint2(
-    model,
-    optimizer,
-    path,
-    load_only_params=True,
-    ignore_modules=None,
-    is_distributed=False,
-    load_ema=False,
-):
-    ignore_modules = ignore_modules or []
-    state = torch_load(path, map_location="cpu")
-    params = state["net"]
-    if load_ema and "ema" in state:
-        print("Loading EMA")
-        for key in model.models:
-            for i, param_name in enumerate(params[key]):
-                if "input_pos" in param_name:
-                    continue
-                params[key][param_name] = state["ema"][key][0][i].clone()
-
-    for key in model.models:
-        if key not in params or key in ignore_modules:
-            continue
-        if not is_distributed:
-            for name in list(params[key].keys()):
-                if name.startswith("module."):
-                    params[key][name[len("module.") :]] = params[key][name]
-                    del params[key][name]
-
-        model_state_dict = model.models[key].state_dict()
-        filtered_state_dict = {
-            name: value
-            for name, value in params[key].items()
-            if name in model_state_dict and value.shape == model_state_dict[name].shape
-        }
-        skipped_keys = set(params[key].keys()) - set(filtered_state_dict.keys())
-        if skipped_keys:
-            print(f"Warning: skipped loading shape-mismatched keys: {skipped_keys}")
-        print(f"{key} loaded")
-        model.models[key].load_state_dict(filtered_state_dict, strict=False)
-
-    model.eval()
-    return model, optimizer, 0, 0

@@ -330,10 +330,3 @@ class ResidualVectorQuantize(nn.Module):
             z_q = z_q + z_q_i
 
         return z_q, torch.cat(z_p, dim=1), torch.stack(codes, dim=1)
-
-
-if __name__ == "__main__":
-    rvq = ResidualVectorQuantize(quantizer_dropout=True)
-    x = torch.randn(16, 512, 80)
-    y = rvq(x)
-    print(y["latents"].shape)

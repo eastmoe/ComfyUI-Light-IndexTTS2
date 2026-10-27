@@ -1,20 +1,4 @@
-# deps provided by ComfyUI
-# torch>=2.1.2,<2.12
-# torchaudio>=2.1.2,<2.12
-# transformers>=4.52.1,<6
-# tokenizers>=0.21,<1
-# huggingface_hub>=0.23 # deps provided by transformers
-# safetensors==0.5.2
-# numpy>=1.23,<3
-# scipy
-# tqdm
-# PyYAML
-# einops
-
-# modelscope # replaced by transformers.AutoModelForCausalLM
-# omegaconf # replaced by PyYAML + indextts.utils.config.AttrDict
-# librosa>=0.10.2.post1,<0.12 # replaced by torchaudio
-
 sentencepiece
-WeTextProcessing; platform_system != "Darwin"
-wetext; platform_system == "Darwin"
+transformers>=4.57.3,<6
+wetext>=0.1.8; platform_system != "Linux"
+WeTextProcessing; platform_system == "Linux"

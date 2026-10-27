@@ -1,6 +1,3 @@
-import yaml
-
-
 class AttrDict(dict):
     def __init__(self, mapping=None, **kwargs):
         super().__init__()
@@ -34,8 +31,3 @@ class AttrDict(dict):
         if isinstance(value, list):
             return [cls._wrap(item) for item in value]
         return value
-
-
-def load_config(path):
-    with open(path, "r", encoding="utf-8") as file:
-        return AttrDict(yaml.safe_load(file) or {})

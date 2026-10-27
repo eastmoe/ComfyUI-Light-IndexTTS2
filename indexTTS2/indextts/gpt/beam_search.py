@@ -1,5 +1,5 @@
 # coding=utf-8
-"""Beam-search compatibility for Transformers versions without legacy helpers."""
+"""Beam search scoring for autoregressive semantic tokens."""
 
 from abc import ABC, abstractmethod
 from collections import UserDict
@@ -9,7 +9,7 @@ import torch
 
 
 class BeamScorer(ABC):
-    """Minimal legacy BeamScorer interface used by the vendored generation code."""
+    """Beam scorer interface."""
 
     @abstractmethod
     def process(
@@ -36,7 +36,7 @@ class BeamScorer(ABC):
 
 
 class BeamSearchScorer(BeamScorer):
-    """Legacy-compatible beam search scorer, adapted from Transformers 4.x."""
+    """Beam search scorer adapted from Transformers 4.x."""
 
     def __init__(
         self,
@@ -299,26 +299,6 @@ class BeamHypotheses:
         else:
             highest_attainable_score = best_sum_logprobs / (cur_len - decoder_prompt_len) ** self.length_penalty
         return self.worst_score >= highest_attainable_score
-
-
-class _UnavailableConstrainedBeamFeature:
-    def __init__(self, *args, **kwargs):
-        raise ImportError(
-            "Constrained beam search is unavailable with this Transformers version. Use ordinary beam search, "
-            "sampling/greedy generation, or install transformers<5."
-        )
-
-
-class ConstrainedBeamSearchScorer(_UnavailableConstrainedBeamFeature):
-    pass
-
-
-class DisjunctiveConstraint(_UnavailableConstrainedBeamFeature):
-    pass
-
-
-class PhrasalConstraint(_UnavailableConstrainedBeamFeature):
-    pass
 
 
 def _normalize_eos_token_id(eos_token_id, device):

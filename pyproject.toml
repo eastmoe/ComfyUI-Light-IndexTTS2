@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-light-indextts2"
-description = "Lightweight ComfyUI wrapper for IndexTTS2 with native AUDIO support."
-version = "0.1.0"
+description = "IndexTTS2 checkpoint loading, conditioning and AR / CFM sampling for ComfyUI."
+version = "0.2.0"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = []
