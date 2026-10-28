@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-light-indextts2"
 description = "IndexTTS2 checkpoint loading, conditioning and AR / CFM sampling for ComfyUI."
-version = "0.2.0"
+version = "0.3.0"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = []

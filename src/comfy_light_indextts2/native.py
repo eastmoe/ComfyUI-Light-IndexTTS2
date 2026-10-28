@@ -2,11 +2,6 @@ import math
 
 import torch
 from torch import nn
-from transformers.modeling_outputs import BaseModelOutputWithPast
-from transformers.models.gpt2.modeling_gpt2 import GPT2Model
-from transformers.models.qwen3.modeling_qwen3 import Qwen3Attention, Qwen3RotaryEmbedding, apply_rotary_pos_emb
-from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import Wav2Vec2BertSelfAttention
-from transformers.pytorch_utils import Conv1D
 
 import comfy.model_management as mm
 import comfy.model_prefetch
@@ -50,85 +45,6 @@ class NativeConformerAttention(RelPositionMultiHeadedAttention):
         return self.linear_out(output), torch.cat((k, v), dim=-1)
 
 
-class NativeW2VAttention(Wav2Vec2BertSelfAttention):
-    def forward(self, hidden_states, attention_mask=None, relative_position_embeddings=None, **kwargs):
-        shape = (*hidden_states.shape[:2], self.num_heads, self.head_size)
-        q, k, v = (layer(hidden_states).reshape(shape).transpose(1, 2)
-                   for layer in (self.linear_q, self.linear_k, self.linear_v))
-        length = hidden_states.shape[1]
-        positions = torch.arange(length, device=q.device)
-        distance = (positions[None, :] - positions[:, None]).clamp(-self.left_max_position_embeddings,
-                                                                 self.right_max_position_embeddings)
-        relative = self.distance_embedding(distance + self.left_max_position_embeddings)
-        bias = torch.einsum('bhld,lrd->bhlr', q, relative) * self.head_size**-0.5
-        if attention_mask is not None:
-            bias = bias + attention_mask
-        return self.linear_out(attention(q, k, v, self.num_heads, bias, self.comfy_attention)), None
-
-
-class NativeQwenAttention(Qwen3Attention):
-    def forward(self, hidden_states, position_embeddings, attention_mask=None, past_key_values=None,
-                cache_position=None, **kwargs):
-        mm.throw_exception_if_processing_interrupted()
-        shape=(*hidden_states.shape[:2],-1,self.head_dim)
-        q=self.q_norm(self.q_proj(hidden_states).view(shape)).transpose(1,2)
-        k=self.k_norm(self.k_proj(hidden_states).view(shape)).transpose(1,2)
-        v=self.v_proj(hidden_states).view(shape).transpose(1,2)
-        q,k=apply_rotary_pos_emb(q,k,*position_embeddings)
-        if past_key_values is not None:
-            k,v=past_key_values.update(k,v,self.layer_idx,{'cache_position':cache_position})
-        if attention_mask is None and q.shape[2]>1:
-            keys=torch.arange(k.shape[2],device=q.device)
-            queries=torch.arange(k.shape[2]-q.shape[2],k.shape[2],device=q.device)
-            attention_mask=(keys[None,:]<=queries[:,None])[None,None]
-        return self.o_proj(attention(q,k,v,self.config.num_attention_heads,attention_mask,self.comfy_attention)),None
-
-
-class NativeGPTAttention(nn.Module):
-    def __init__(self, source):
-        super().__init__()
-        self.c_attn, self.c_proj = source.c_attn, source.c_proj
-        self.heads, self.head_dim, self.split_size = source.num_heads, source.head_dim, source.split_size
-        self.comfy_attention = ComfyAttention()
-
-    def forward(self, x, cache=None):
-        batch, length, _ = x.shape
-        q, k, v = (part.reshape(batch, length, self.heads, self.head_dim).transpose(1, 2)
-                   for part in self.c_attn(x).split(self.split_size, dim=-1))
-        offset = 0 if cache is None else cache[0].shape[2]
-        if cache is not None:
-            k, v = torch.cat((cache[0], k), dim=2), torch.cat((cache[1], v), dim=2)
-        mask = None
-        if length > 1:
-            keys = torch.arange(offset + length, device=x.device)
-            queries = torch.arange(offset, offset + length, device=x.device)
-            mask = (keys[None, :] <= queries[:, None])[None, None]
-        return self.c_proj(attention(q, k, v, self.heads, mask, self.comfy_attention)), (k, v)
-
-
-class NativeGPT(nn.Module):
-    def __init__(self, source):
-        super().__init__()
-        self.h, self.ln_f, self.config = source.h, source.ln_f, source.config
-        for block in self.h:
-            block.attn = NativeGPTAttention(block.attn)
-
-    def forward(self, inputs_embeds, past_key_values=None, use_cache=False, **kwargs):
-        x = inputs_embeds
-        cache = []
-        queue = comfy.model_prefetch.make_prefetch_queue(list(self.h), x.device, {'prefetch_dynamic_vbars': True})
-        for index, block in enumerate(self.h):
-            mm.throw_exception_if_processing_interrupted()
-            comfy.model_prefetch.prefetch_queue_pop(queue, x.device, block, x.dtype, malloc_scope='block')
-            attended, kv = block.attn(block.ln_1(x), None if past_key_values is None else past_key_values[index])
-            x = x + attended
-            x = x + block.mlp(block.ln_2(x))
-            if use_cache:
-                cache.append(kv)
-        comfy.model_prefetch.prefetch_queue_pop(queue, x.device, None, x.dtype, malloc_scope='block')
-        return BaseModelOutputWithPast(last_hidden_state=self.ln_f(x), past_key_values=tuple(cache) if use_cache else None)
-
-
 class NativeFlowAttention(Attention):
     def forward(self, x, freqs_cis, mask, input_pos=None, context=None, context_freqs_cis=None):
         batch, length, _ = x.shape
@@ -159,15 +75,7 @@ class NativeFlowStack(Transformer):
 
 
 def native_modules(module):
-    if isinstance(module, GPT2Model):
-        module = NativeGPT(module)
-    elif isinstance(module, Wav2Vec2BertSelfAttention):
-        module.__class__ = NativeW2VAttention
-        module.comfy_attention = ComfyAttention()
-    elif isinstance(module, Qwen3Attention):
-        module.__class__ = NativeQwenAttention
-        module.comfy_attention = ComfyAttention()
-    elif isinstance(module, RelPositionMultiHeadedAttention):
+    if isinstance(module, RelPositionMultiHeadedAttention):
         module.__class__ = NativeConformerAttention
         module.comfy_attention = ComfyAttention()
     elif isinstance(module, Attend):
@@ -178,16 +86,9 @@ def native_modules(module):
         module.comfy_attention = ComfyAttention()
     elif isinstance(module, Transformer):
         module.__class__ = NativeFlowStack
-    if isinstance(module,Qwen3RotaryEmbedding):
-        with torch.device('cpu'):
-            module=Qwen3RotaryEmbedding(module.config)
     for name, child in list(module.named_children()):
         replacement = None
-        if isinstance(child, Conv1D):
-            replacement = comfy.ops.manual_cast.Linear(child.weight.shape[0], child.weight.shape[1], device='meta')
-            replacement.weight = nn.Parameter(child.weight.transpose(0, 1).contiguous())
-            replacement.bias = child.bias
-        elif type(child) in (nn.Linear, nn.Embedding, nn.Conv1d, nn.Conv2d, nn.ConvTranspose1d, nn.LayerNorm, nn.GroupNorm):
+        if type(child) in (nn.Linear, nn.Embedding, nn.Conv1d, nn.Conv2d, nn.ConvTranspose1d, nn.LayerNorm, nn.GroupNorm):
             operation = getattr(comfy.ops.manual_cast, type(child).__name__)
             if isinstance(child, nn.Linear):
                 replacement = operation(child.in_features, child.out_features, bias=child.bias is not None, device='meta')

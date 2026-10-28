@@ -3,8 +3,6 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 from tqdm.auto import tqdm
-from transformers.generation.logits_process import (RepetitionPenaltyLogitsProcessor,
-    TemperatureLogitsWarper, TopKLogitsWarper, TopPLogitsWarper)
 
 import comfy.model_management as mm
 import comfy.utils
@@ -38,21 +36,31 @@ class IndexTTSSampler:
     length_scale: float = 1.72
     target_duration: float = 0.
 
+    def process_logits(self, ids, scores):
+        repeated = scores.gather(1, ids)
+        repeated = torch.where(repeated < 0, repeated * self.repetition_penalty, repeated / self.repetition_penalty)
+        scores = scores.scatter(1, ids, repeated)
+        keep = 2 if self.num_beams > 1 else 1
+        if self.typical_mass < 1.:
+            scores = TypicalLogitsWarper(mass=self.typical_mass, min_tokens_to_keep=keep)(ids, scores)
+        if self.do_sample:
+            scores = scores / self.temperature
+            if self.top_k:
+                count = min(max(self.top_k, keep), scores.shape[-1])
+                scores = scores.masked_fill(scores < scores.topk(count).values[:, -1:], -torch.inf)
+            if self.top_p < 1.:
+                sorted_scores, indices = scores.sort(descending=False)
+                remove = sorted_scores.softmax(-1).cumsum(-1) <= (1 - self.top_p)
+                remove[..., -keep:] = False
+                scores = scores.masked_fill(remove.scatter(1, indices, remove), -torch.inf)
+        return scores
+
     def generate_codes(self, model, text, prefix, generator, limit, progress):
         gpt = model.gpt
         ids, embedded, _ = gpt.prepare_gpt_inputs(prefix, text)
         prompt_length = ids.shape[1]
         initial = gpt.mel_embedding(ids[:,-1:]) + gpt.mel_pos_embedding.emb.weight[0]
         inputs = torch.cat((embedded, initial),dim=1)
-        processors = [RepetitionPenaltyLogitsProcessor(self.repetition_penalty)]
-        if self.typical_mass < 1.:
-            processors.append(TypicalLogitsWarper(mass=self.typical_mass, min_tokens_to_keep=2 if self.num_beams>1 else 1))
-        if self.do_sample:
-            processors.append(TemperatureLogitsWarper(self.temperature))
-            if self.top_k:
-                processors.append(TopKLogitsWarper(self.top_k,min_tokens_to_keep=2 if self.num_beams>1 else 1))
-            if self.top_p < 1.:
-                processors.append(TopPLogitsWarper(self.top_p,min_tokens_to_keep=2 if self.num_beams>1 else 1))
         beams = self.num_beams
         scorer = None
         if beams > 1:
@@ -68,8 +76,7 @@ class IndexTTSSampler:
             cache = output.past_key_values
             logits = gpt.mel_head(gpt.final_norm(output.last_hidden_state[:,-1:]))[:,0].float()
             scores = F.log_softmax(logits,dim=-1) if beams>1 else logits
-            for processor in processors:
-                scores = processor(ids,scores)
+            scores = self.process_logits(ids, scores)
             if beams > 1:
                 combined = (scores + beam_scores[:,None]).reshape(1,-1)
                 if self.do_sample:

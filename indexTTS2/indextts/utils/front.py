@@ -1,17 +1,13 @@
 # -*- coding: utf-8 -*-
-import os
-import traceback
 import re
 from typing import List, Union, overload
 import warnings
-from indextts.utils.common import tokenize_by_CJK_char, de_tokenized_by_CJK_char
-from sentencepiece import SentencePieceProcessor
+from indextts.utils.common import de_tokenized_by_CJK_char
+from indextts.utils.text_normalization import normalize_numbers
 
 
 class TextNormalizer:
     def __init__(self):
-        self.zh_normalizer = None
-        self.en_normalizer = None
         self.char_rep_map = {
             "：": ",",
             "；": ",",
@@ -85,61 +81,20 @@ class TextNormalizer:
         has_pinyin = bool(re.search(TextNormalizer.PINYIN_TONE_PATTERN, s, re.IGNORECASE))
         return has_pinyin
 
-    def load(self):
-        # print(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-        # sys.path.append(model_dir)
-        import platform
-        if self.zh_normalizer is not None and self.en_normalizer is not None:
-            return
-        if platform.system() in {"Darwin", "Windows"}:
-            from wetext import Normalizer
-
-            self.zh_normalizer = Normalizer(remove_erhua=False, lang="zh", operator="tn")
-            self.en_normalizer = Normalizer(lang="en", operator="tn")
-        else:
-            from tn.chinese.normalizer import Normalizer as NormalizerZh
-            from tn.english.normalizer import Normalizer as NormalizerEn
-            # use new cache dir for build tagger rules with disable remove_interjections and remove_erhua
-            cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tagger_cache")
-            if not os.path.exists(cache_dir):
-                os.makedirs(cache_dir)
-                with open(os.path.join(cache_dir, ".gitignore"), "w") as f:
-                    f.write("*\n")
-            self.zh_normalizer = NormalizerZh(
-                cache_dir=cache_dir, remove_interjections=False, remove_erhua=False, overwrite_cache=False
-            )
-            self.en_normalizer = NormalizerEn(overwrite_cache=False)
 
     def normalize(self, text: str) -> str:
-        if not self.zh_normalizer or not self.en_normalizer:
-            print("Error, text normalizer is not initialized !!!")
-            return ""
-        if self.use_chinese(text):
-            text = re.sub(TextNormalizer.ENGLISH_CONTRACTION_PATTERN, r"\1 is", text, flags=re.IGNORECASE)
-            replaced_text, pinyin_list = self.save_pinyin_tones(text.rstrip())
-            
-            replaced_text, original_name_list = self.save_names(replaced_text)
-            try:
-                result = self.zh_normalizer.normalize(replaced_text)
-            except Exception:
-                result = ""
-                print(traceback.format_exc())
-            # 恢复人名
-            result = self.restore_names(result, original_name_list)
-            # 恢复拼音声调
-            result = self.restore_pinyin_tones(result, pinyin_list)
-            pattern = re.compile("|".join(re.escape(p) for p in self.zh_char_rep_map.keys()))
-            result = pattern.sub(lambda x: self.zh_char_rep_map[x.group()], result)
-        else:
-            try:
-                text = re.sub(TextNormalizer.ENGLISH_CONTRACTION_PATTERN, r"\1 is", text, flags=re.IGNORECASE)
-                result = self.en_normalizer.normalize(text)
-            except Exception:
-                result = text
-                print(traceback.format_exc())
-            pattern = re.compile("|".join(re.escape(p) for p in self.char_rep_map.keys()))
-            result = pattern.sub(lambda x: self.char_rep_map[x.group()], result)
-        return result
+        chinese = self.use_chinese(text)
+        text = re.sub(self.ENGLISH_CONTRACTION_PATTERN, r"\1 is", text, flags=re.IGNORECASE)
+        if chinese:
+            text, pinyin_list = self.save_pinyin_tones(text.rstrip())
+            text, names = self.save_names(text)
+        text = normalize_numbers(text, chinese)
+        if chinese:
+            text = self.restore_names(text, names)
+            text = self.restore_pinyin_tones(text, pinyin_list)
+        replacements = self.zh_char_rep_map if chinese else self.char_rep_map
+        pattern = re.compile('|'.join(re.escape(value) for value in replacements))
+        return pattern.sub(lambda match: replacements[match[0]], text)
 
     def correct_pinyin(self, pinyin: str):
         """
@@ -229,24 +184,6 @@ class TextNormalizer:
 
 
 class TextTokenizer:
-    def __init__(self, vocab_file: str, normalizer: TextNormalizer = None):
-        self.vocab_file = vocab_file
-        self.normalizer = normalizer
-
-        if self.vocab_file is None:
-            raise ValueError("vocab_file is None")
-        if not os.path.exists(self.vocab_file):
-            raise ValueError(f"vocab_file {self.vocab_file} does not exist")
-        if self.normalizer:
-            self.normalizer.load()
-        # 加载词表
-        self.sp_model = SentencePieceProcessor(model_file=self.vocab_file)
-
-        self.pre_tokenizers = [
-            # 预处理器
-            tokenize_by_CJK_char,
-        ]
-
     @property
     def vocab_size(self):
         return self.sp_model.GetPieceSize()

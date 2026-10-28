@@ -1,4 +1,0 @@
-sentencepiece
-transformers>=4.57.3,<6
-wetext>=0.1.8; platform_system != "Linux"
-WeTextProcessing; platform_system == "Linux"

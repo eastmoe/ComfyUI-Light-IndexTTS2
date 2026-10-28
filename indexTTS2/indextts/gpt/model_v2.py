@@ -1,17 +1,11 @@
-import functools
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from transformers import GPT2Config, GPT2Model
+from indextts.gpt.gpt2 import GPT
 
 from indextts.gpt.conformer_encoder import ConformerEncoder
 from indextts.gpt.perceiver import PerceiverResampler
-
-
-def null_position_embeddings(range, dim):
-    return torch.zeros((range.shape[0], range.shape[1], dim), device=range.device)
 
 
 class LearnedPositionEmbeddings(nn.Module):
@@ -24,34 +18,12 @@ class LearnedPositionEmbeddings(nn.Module):
         return self.emb(torch.arange(0, sl, device=x.device))
 
 
-def build_hf_gpt_transformer(layers, model_dim, heads, max_mel_seq_len, max_text_seq_len, checkpointing):
-    """
-    GPT-2 implemented by the HuggingFace library.
-    """
-    gpt_config = GPT2Config(vocab_size=256,  # Unused.
-                            n_positions=max_mel_seq_len + max_text_seq_len,
-                            n_ctx=max_mel_seq_len + max_text_seq_len,
-                            n_embd=model_dim,
-                            n_layer=layers,
-                            n_head=heads,
-                            bos_token_id=None, eos_token_id=None,
-                            use_cache=not checkpointing)
-    gpt = GPT2Model(gpt_config)
-    # Override the built in positional embeddings
-    del gpt.wpe
-    gpt.wpe = functools.partial(null_position_embeddings, dim=model_dim)
-    # Built-in token embeddings are unused.
-    del gpt.wte
-    return gpt, LearnedPositionEmbeddings(max_mel_seq_len, model_dim), LearnedPositionEmbeddings(max_text_seq_len, model_dim), \
-        None, None
-
-
 class UnifiedVoice(nn.Module):
     def __init__(self, layers=8, model_dim=512, heads=8, max_text_tokens=120, max_mel_tokens=250, max_conditioning_inputs=1,
                  mel_length_compression=1024, number_text_tokens=256,
                  start_text_token=0, stop_text_token=1, number_mel_codes=8194, start_mel_token=8192, stop_mel_token=8193,
                  train_solo_embeddings=False, use_mel_codes_as_input=True,
-                 checkpointing=True, types=1,
+                 types=1,
                  condition_num_latent=32, condition_type="conformer_perceiver", condition_module=None, emo_condition_module=None):
         """
         Args:
@@ -70,7 +42,6 @@ class UnifiedVoice(nn.Module):
             stop_mel_token:
             train_solo_embeddings:
             use_mel_codes_as_input:
-            checkpointing:
             condition_type: perceiver, gst or default encoder
         """
         super().__init__()
@@ -118,9 +89,9 @@ class UnifiedVoice(nn.Module):
         self.emovec_layer = nn.Linear(1024, model_dim)
 
         self.mel_embedding = nn.Embedding(self.number_mel_codes, model_dim)
-        self.gpt, self.mel_pos_embedding, self.text_pos_embedding, self.mel_layer_pos_embedding, self.text_layer_pos_embedding = \
-            build_hf_gpt_transformer(layers, model_dim, heads, self.max_mel_tokens + 2 + self.max_conditioning_inputs,
-                                     self.max_text_tokens + 2, checkpointing)
+        self.gpt = GPT(layers, model_dim, heads)
+        self.mel_pos_embedding = LearnedPositionEmbeddings(self.max_mel_tokens + 2 + self.max_conditioning_inputs, model_dim)
+        self.text_pos_embedding = LearnedPositionEmbeddings(self.max_text_tokens + 2, model_dim)
         self.final_norm = nn.LayerNorm(model_dim)
         self.text_head = nn.Linear(model_dim, self.number_text_tokens * types + 1)
         self.mel_head = nn.Linear(model_dim, self.number_mel_codes)
@@ -259,9 +230,9 @@ class UnifiedVoice(nn.Module):
             conds_latent: (b, 32, dim) audio conditioning embedding by `get_conditioning()`
             text_inputs: (b, L)
         Returns:
-            input_ids: (b, s+1) the input ids for the GPT2InferenceModel.generate()
-            inputs_embeds: (b, s+1, dim) the input embeddings for the GPT2InferenceModel.forward()
-            attention_mask: (b, s+1) the attention mask for the GPT2InferenceModel.generate()
+            input_ids: (b, s+1) prefix placeholders followed by the mel BOS token
+            inputs_embeds: (b, s, dim) condition and text embeddings
+            attention_mask: (b, s+1) valid prefix positions and mel BOS
         """
         b, L = text_inputs.shape[:2]
         device = text_inputs.device

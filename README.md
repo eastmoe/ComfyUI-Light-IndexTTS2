@@ -4,11 +4,7 @@
 
 ## 安装与模型
 
-将仓库放入 `ComfyUI/custom_nodes/`，使用 ComfyUI 的 Python 环境安装依赖：
-
-```shell
-python -m pip install -r requirements.txt
-```
+将仓库放入 `ComfyUI/custom_nodes/`。插件使用 ComfyUI 自带功能与依赖。
 
 从 [eastmoe/IndexTTS-Comfy](https://huggingface.co/eastmoe/IndexTTS-Comfy) 下载 IndexTTS2 `.safetensors`，放入 `ComfyUI/models/checkpoints/`，重启 ComfyUI。
 
@@ -24,6 +20,8 @@ python -m pip install -r requirements.txt
 自定义节点位于 `eastmoe → IndexTTS`。加载器输出 `MODEL`、`CLIP`、`VAE`。条件编码器与引导器提供语音条件，AR / CFM 采样器、随机源、CFM 采样计划和空 Mel Latent 接入原生 `SamplerCustomAdvanced`。输出经原生 `VAE Decode Audio` 解码，再由音频分段拼接节点合并，连接 `Save Audio` 保存。
 
 `max_text_tokens` 控制每段文本的 token 上限，`max_tokens` 控制每段语义 token 上限。空 Mel Latent 的 `seconds` 设置每段最大容量，`target_duration` 提供 GPT 时长条件。`steps` 设置 CFM Euler 积分步数，`cfm_cfg` 默认 0.7，对应常规 CFG 1.7。各参数的含义可在节点悬停提示中查看。
+
+文本规范化使用 Python 规则，支持中英文数字、日期、时间、金额、百分比和常见单位。特殊读法可直接写成中文或英文词，中文多音字可用带声调的拼音标注。
 
 ## 上游项目
 

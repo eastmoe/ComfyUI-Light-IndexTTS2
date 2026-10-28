@@ -1,11 +1,8 @@
 import torch
 
-from transformers.generation.logits_process import TypicalLogitsWarper as BaseTypicalLogitsWarper
-
-
-class TypicalLogitsWarper(BaseTypicalLogitsWarper):
+class TypicalLogitsWarper:
     def __init__(self, mass: float = 0.9, filter_value: float = -float("Inf"), min_tokens_to_keep: int = 1):
-        super().__init__(mass=mass, filter_value=filter_value, min_tokens_to_keep=min_tokens_to_keep)
+        self.mass, self.filter_value, self.min_tokens_to_keep = mass, filter_value, min_tokens_to_keep
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         # calculate entropy

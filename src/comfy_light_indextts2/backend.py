@@ -3,22 +3,22 @@ import copy
 import json
 import logging
 import re
+from dataclasses import fields
 
 import torch
 import torch.nn.functional as F
 from torch.nn.utils import remove_weight_norm
 import torchaudio.functional as AF
 from torchaudio.compliance.kaldi import fbank
-from sentencepiece import SentencePieceProcessor
 from tokenizers import Tokenizer
-from transformers import (GenerationConfig, PreTrainedTokenizerFast, Qwen3Config, Qwen3ForCausalLM,
-                          SeamlessM4TFeatureExtractor, Wav2Vec2BertConfig, Wav2Vec2BertModel)
 
 import comfy.latent_formats
 import comfy.model_management as mm
 import comfy.model_patcher
-import comfy.model_prefetch
+import comfy.ops
 import comfy.sd
+from comfy.text_encoders.llama import Qwen3_06B, Qwen3_06BConfig
+from comfy.text_encoders.spiece_tokenizer import SPieceTokenizer
 
 from indextts.gpt.model_v2 import UnifiedVoice
 from indextts.s2mel.modules.bigvgan.bigvgan import BigVGAN
@@ -30,6 +30,7 @@ from indextts.utils.front import TextNormalizer, TextTokenizer
 from indextts.utils.maskgct.models.codec.kmeans.repcodec_model import RepCodec
 
 from .native import native_modules
+from .semantic import SemanticEncoder, reference_features
 
 
 EMOTIONS = ('happy', 'angry', 'sad', 'fear', 'hate', 'low', 'surprise', 'neutral')
@@ -48,8 +49,7 @@ class MelLatent(comfy.latent_formats.LatentFormat):
 class BundledTokenizer(TextTokenizer):
     def __init__(self, assets):
         self.normalizer = TextNormalizer()
-        self.normalizer.load()
-        self.sp_model = SentencePieceProcessor(model_proto=base64.b64decode(assets['bpe_model_base64']))
+        self.sp_model = SPieceTokenizer(base64.b64decode(assets['bpe_model_base64']), add_eos=False).tokenizer
         self.pre_tokenizers = [tokenize_by_CJK_char]
 
 
@@ -88,7 +88,7 @@ class ReferenceEncoder(torch.nn.Module):
     def __init__(self, semantic_config):
         super().__init__()
         with torch.device('meta'):
-            self.semantic_model = Wav2Vec2BertModel(Wav2Vec2BertConfig(**semantic_config))
+            self.semantic_model = SemanticEncoder(AttrDict(semantic_config))
             self.campplus = CAMPPlus(feat_dim=80, embedding_size=192)
         self.register_buffer('mean', torch.empty(1024))
         self.register_buffer('std', torch.empty(1024))
@@ -96,38 +96,18 @@ class ReferenceEncoder(torch.nn.Module):
         self.register_buffer('emotion_matrix', torch.empty(73, 1280))
 
     def semantic_features(self, features, mask):
-        x=self.semantic_model.feature_projection(features)[0]
-        valid=mask.bool()
-        x=x.masked_fill(~valid[:,:,None],0.)
-        bias=torch.zeros((x.shape[0],1,1,x.shape[1]),device=x.device,dtype=x.dtype).masked_fill(~valid[:,None,None,:],-torch.inf)
-        layers=self.semantic_model.encoder.layers
-        queue=comfy.model_prefetch.make_prefetch_queue(list(layers),x.device,{'prefetch_dynamic_vbars':True})
-        for layer in layers:
-            mm.throw_exception_if_processing_interrupted()
-            comfy.model_prefetch.prefetch_queue_pop(queue,x.device,layer,x.dtype,malloc_scope='block')
-            result=layer(x,attention_mask=bias,relative_position_embeddings=None,conv_attention_mask=mask)
-            # Transformers 4.57 returns a tuple; 5.x returns the hidden tensor.
-            x=result[0] if isinstance(result,tuple) else result
-        comfy.model_prefetch.prefetch_queue_pop(queue,x.device,None,x.dtype,malloc_scope='block')
-        return (x-self.mean)/self.std
-
-
-class EmotionModel(torch.nn.Module):
-    def __init__(self, model):
-        super().__init__()
-        self.model=model
+        return (self.semantic_model(features, mask)-self.mean)/self.std
 
 
 class IndexTTSClip(comfy.sd.CLIP):
-    def __init__(self, encoder, emotion, assets, feature_config, config, checkpoint_id):
+    def __init__(self, encoder, emotion, assets, config, checkpoint_id):
         self.cond_stage_model = encoder
         self.patcher = comfy.model_patcher.ModelPatcher(encoder, mm.text_encoder_device(), mm.text_encoder_offload_device())
         self.emotion_patcher = comfy.model_patcher.ModelPatcher(emotion, mm.text_encoder_device(), mm.text_encoder_offload_device())
         self.tokenizer = BundledTokenizer(assets)
         files = assets['files']
-        self.emotion_tokenizer = PreTrainedTokenizerFast(tokenizer_object=Tokenizer.from_str(files['emotion/tokenizer.json']),
-            eos_token='<|im_end|>', pad_token='<|endoftext|>', chat_template=files['emotion/chat_template.jinja'])
-        self.extract_features = SeamlessM4TFeatureExtractor(**feature_config)
+        self.emotion_tokenizer = Tokenizer.from_str(files['emotion/tokenizer.json'])
+        self.emotion_eos = json.loads(files['emotion/generation_config.json'])['eos_token_id']
         self.config, self.checkpoint_id = config, checkpoint_id
 
     def clone(self, disable_dynamic=False):
@@ -141,15 +121,15 @@ class IndexTTSClip(comfy.sd.CLIP):
         mm.load_models_gpu([patcher], memory_required=256*1024**2, force_full_load=True)
         prompt = '请对以下文本进行情感打分，给出喜、怒、哀、惧、低落、厌恶、自然、惊喜这八种情感的得分（0-1.2之间）。'
         tokenizer = self.emotion_tokenizer
-        encoded = tokenizer.apply_chat_template([{'role':'user','content':prompt+'\n'+text}],
-            tokenize=False, add_generation_prompt=True, enable_thinking=False)
-        inputs = tokenizer(encoded, return_tensors='pt',return_token_type_ids=False).to(patcher.load_device)
+        encoded = 'Human: '+prompt+'\n'+text+'<|endoftext|>\r\nAssistant:'
+        inputs = torch.tensor([tokenizer.encode(encoded).ids], device=patcher.load_device)
         patcher.pre_run()
         try:
             mm.throw_exception_if_processing_interrupted()
-            output = patcher.model.model.generate(**inputs, do_sample=False, max_new_tokens=256,
-                                             pad_token_id=tokenizer.pad_token_id)
-            content = tokenizer.decode(output[0, inputs.input_ids.shape[1]:], skip_special_tokens=True)
+            emotion = patcher.model
+            output = emotion.generate(embeds=emotion.model.embed_tokens(inputs), do_sample=False, max_length=256,
+                                      execution_dtype=emotion.dtype, stop_tokens=[self.emotion_eos])
+            content = tokenizer.decode(output, skip_special_tokens=True)
         finally:
             patcher.cleanup()
         scores = {key:float(value) for key,value in re.findall(r'([\w]+)["\s]*[:：]["\s]*([+-]?\d+(?:\.\d+)?)', content)}
@@ -176,9 +156,9 @@ class IndexTTSClip(comfy.sd.CLIP):
             wave = audio['waveform'][0].mean(dim=0, keepdim=True).float().cpu()
             rate = audio['sample_rate']
             wave16 = AF.resample(wave, rate, 16000)
-            features = self.extract_features(wave16.numpy(), sampling_rate=16000, return_tensors='pt')
+            features, mask = reference_features(wave16)
             mm.throw_exception_if_processing_interrupted()
-            semantic = model.semantic_features(features.input_features.to(device),features.attention_mask.to(device))
+            semantic = model.semantic_features(features.to(device),mask.to(device))
             if not with_style:
                 return semantic
             wave22 = AF.resample(wave, rate, 22050).to(device)
@@ -254,7 +234,12 @@ def load_checkpoint(weights, metadata, dtype=None):
         return {key.removeprefix(prefix):weights.pop(key) for key in list(weights) if key.startswith(prefix)}
 
     network = IndexTTSModel(config,checkpoint_id,dtype)
-    network.load_state_dict(take('model.diffusion_model.'),strict=True,assign=True)
+    network_weights = take('model.diffusion_model.')
+    # Original GPT-2 checkpoints store Conv1D matrices in [in, out] order.
+    for key in network_weights:
+        if key.startswith('gpt.gpt.h.') and key.endswith('.weight') and ('.attn.c_' in key or '.mlp.c_' in key):
+            network_weights[key] = network_weights[key].transpose(0, 1).contiguous()
+    network.load_state_dict(network_weights,strict=True,assign=True)
     for module in network.modules():
         if 'weight_g' in module._parameters:
             remove_weight_norm(module)
@@ -262,9 +247,13 @@ def load_checkpoint(weights, metadata, dtype=None):
     network = native_modules(network).eval()
     model = comfy.model_patcher.ModelPatcher(network,device,mm.unet_offload_device())
     encoder = ReferenceEncoder(json.loads(metadata['indextts.semantic_config']))
-    encoder.semantic_model.load_state_dict(take('cond_stage_model.semantic_model.'),strict=True,assign=True)
-    # IndexTTS consumes hidden_states[17]; later encoder layers are unused.
-    del encoder.semantic_model.encoder.layers[17:]
+    semantic_weights = take('cond_stage_model.semantic_model.')
+    # Only hidden_states[17] is consumed; discard the training mask and later layers.
+    semantic_weights.pop('masked_spec_embed')
+    for key in list(semantic_weights):
+        if key.startswith('encoder.layers.') and int(key.split('.')[2]) >= 17:
+            del semantic_weights[key]
+    encoder.semantic_model.load_state_dict(semantic_weights,strict=True,assign=True)
     encoder.campplus.load_state_dict(take('cond_stage_model.campplus.'),strict=True,assign=True)
     stats = take('cond_stage_model.semantic_stats.')
     encoder.mean, encoder.std = stats['mean'], stats['var'].sqrt()
@@ -272,19 +261,19 @@ def load_checkpoint(weights, metadata, dtype=None):
     encoder.emotion_matrix = weights.pop('cond_stage_model.emotion.emotion_matrix')
     encoder = native_modules(encoder).eval()
     assets = json.loads(bytes(weights.pop('cond_stage_model.indextts_assets').numpy()).decode('utf-8'))
-    with torch.device('meta'):
-        emotion = Qwen3ForCausalLM(Qwen3Config(**json.loads(metadata['indextts.emotion_model_config'])))
-        vocoder = BigVGAN(AttrDict(json.loads(metadata['indextts.vocoder_config'])))
     emotion_weights = take('cond_stage_model.emotion_model.')
-    emotion_weights['lm_head.weight'] = emotion_weights['model.embed_tokens.weight']
+    emotion_config = json.loads(metadata['indextts.emotion_model_config'])
+    config_keys = {field.name for field in fields(Qwen3_06BConfig)}
+    emotion = Qwen3_06B({key:value for key,value in emotion_config.items() if key in config_keys},
+        dtype=emotion_weights['model.embed_tokens.weight'].dtype, device='meta', operations=comfy.ops.manual_cast)
     emotion.load_state_dict(emotion_weights,strict=True,assign=True)
-    emotion.tie_weights()
-    emotion.generation_config=GenerationConfig(**json.loads(assets['files']['emotion/generation_config.json']))
-    emotion = native_modules(emotion).eval()
+    emotion.eval()
+    with torch.device('meta'):
+        vocoder = BigVGAN(AttrDict(json.loads(metadata['indextts.vocoder_config'])))
     vocoder.load_state_dict(take('first_stage_model.'),strict=True,assign=True)
     vocoder.remove_weight_norm()
     vocoder = native_modules(vocoder).eval()
     if weights:
         raise ValueError(f'Unrecognized IndexTTS checkpoint weights: {next(iter(weights))}')
-    clip = IndexTTSClip(encoder,EmotionModel(emotion),assets,json.loads(metadata['indextts.feature_extractor_config']),config,checkpoint_id)
+    clip = IndexTTSClip(encoder,emotion,assets,config,checkpoint_id)
     return model,clip,IndexTTSVAE(vocoder,checkpoint_id)
